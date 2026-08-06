@@ -1,0 +1,4 @@
+# Copy to .dev.vars for use with `wrangler dev` (that file is gitignored).
+ADMIN_TOKEN="dev-admin-token"
+UPLOAD_HMAC_SECRET="dev-upload-secret-change-me"
+# NOTIFY_WEBHOOK_URL="https://hooks.slack.com/services/xxx"

@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Worker (Cloudflare)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+
+      # `allowScripts` in package.json already covers esbuild and workerd, so npm's
+      # allow-scripts gate does not block the postinstall steps wrangler and vitest need.
+      - name: Install
+        run: npm ci
+
+      # Runs `wrangler types` first, so a binding added to wrangler.jsonc without a
+      # matching type regeneration fails here rather than at deploy time.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npx vitest run

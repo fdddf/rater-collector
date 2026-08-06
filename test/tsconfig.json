@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // Types for the virtual cloudflare:test module come from the pool and are only
+    // visible inside the test directory.
+    "types": ["node", "@cloudflare/vitest-pool-workers/types"],
+    // Tests are full of untyped JSON access like `expect(body.x)`.
+    "noUnusedLocals": false
+  },
+  "include": ["./**/*.ts", "../src/**/*.ts", "../worker-configuration.d.ts"]
+}

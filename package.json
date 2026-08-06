@@ -1,0 +1,33 @@
+{
+  "name": "rater-collector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler types && wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p test",
+    "test": "wrangler types && vitest run",
+    "test:watch": "vitest",
+    "migrate:local": "wrangler d1 migrations apply rater --local",
+    "migrate:remote": "wrangler d1 migrations apply rater --remote",
+    "register-app": "node scripts/register-app.mjs",
+    "e2e": "bash scripts/e2e.sh",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "hono": "^4.13.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.20.2",
+    "@types/node": "^26.1.2",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.119.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260801.1": true
+  }
+}
