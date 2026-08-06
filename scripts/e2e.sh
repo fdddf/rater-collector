@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end run against a live `wrangler dev`, exercising the same call sequence the
-# client makes. Covers the API-level half of the acceptance checklist in docs/PROGRESS.md.
+# client makes — every acceptance check that does not require tapping a screen.
 set -uo pipefail
 
 BASE=http://localhost:8787
