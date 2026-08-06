@@ -74,6 +74,11 @@ api.post('/apps', async (c) => {
   const exists = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?').bind(id).first();
   if (exists) throw Errors.badRequest(`App id "${id}" already exists.`);
 
+  // The `rtr_pub_` prefix is deliberate on both counts. `pub` because this key ships
+  // inside the app binary and is not a secret — see requireAppKey. And it stays clear
+  // of Stripe's restricted-key prefix, which an earlier version of this line matched:
+  // a key in that shape trips GitHub's secret scanner, blocking any push that carries
+  // it with a misleading warning about leaked Stripe credentials.
   const apiKey = `rtr_pub_${crypto.randomUUID().replace(/-/g, '')}${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
   await c.env.DB.prepare(
     'INSERT INTO apps (id, name, app_store_id, api_key_hash, enabled, created_at) VALUES (?,?,?,?,1,?)',
