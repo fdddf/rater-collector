@@ -1,0 +1,119 @@
+@import 'tailwindcss';
+
+/* The theme toggle stamps `class="dark"` on <html>; `prefers-color-scheme` seeds it at boot
+   (see main.tsx), so a single class drives every dark rule. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * One token layer, two value sets. Components are written against roles (`bg-surface`,
+ * `text-ink-2`) so the light/dark palettes swap in exactly one place.
+ *
+ * Chart ink, surfaces and status colors come from the house data-viz palette; the daily
+ * chart is a single series, so it uses the sequential blue rather than a categorical slot.
+ */
+:root {
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f2f1ed;
+  --border: #e1e0d9;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-3: #898781;
+  --accent: #2a78d6;
+  --accent-ink: #ffffff;
+  --accent-wash: #eaf2fd;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --series: #2a78d6;
+  --series-soft: #cde2fb;
+}
+
+.dark {
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --surface-2: #232322;
+  --border: #2c2c2a;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --ink-3: #898781;
+  --accent: #3987e5;
+  --accent-ink: #08131f;
+  --accent-wash: #16283c;
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+  --series: #3987e5;
+  --series-soft: #1c3453;
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-wash: var(--accent-wash);
+  --color-good: var(--good);
+  --color-warning: var(--warning);
+  --color-serious: var(--serious);
+  --color-critical: var(--critical);
+  --color-series: var(--series);
+  --color-series-soft: var(--series-soft);
+
+  --font-sans:
+    system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-page text-ink font-sans antialiased;
+  }
+  /* Tailwind's reset drops the default ring; put a visible one back for keyboard users. */
+  :focus-visible {
+    @apply outline-accent outline-2 outline-offset-2;
+  }
+  ::selection {
+    @apply bg-accent/25;
+  }
+}
+
+@layer utilities {
+  /* Columns of numbers align; standalone display figures keep proportional widths. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .animate-toast-in {
+    animation: toast-in 0.18s ease-out;
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

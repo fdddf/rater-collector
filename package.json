@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "wrangler types && wrangler dev",
     "deploy": "npm run migrate:remote && wrangler deploy",
+    "admin:install": "npm --prefix admin-ui install",
+    "admin:dev": "npm --prefix admin-ui run dev",
+    "admin:build": "npm --prefix admin-ui run build && node scripts/build-admin.mjs",
     "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p test",
     "test": "wrangler types && vitest run",
     "test:watch": "vitest",

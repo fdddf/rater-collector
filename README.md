@@ -150,11 +150,21 @@ Batched `shown` / `positive` / `negative` / `dismissed` / `submitted` events, us
 
 ## Admin console
 
-`GET /admin` is a single-file HTML console — no build step, so deploying the Worker deploys the console. It covers feedback browsing and filtering, detail with screenshot previews, status and internal notes, conversion funnel stats, **live copy editing**, and app registration and deactivation.
+`GET /admin` serves a React + TypeScript + Tailwind console. It covers feedback browsing and filtering, detail with screenshot previews, status and internal notes, conversion funnel stats, **live copy editing**, and app registration and deactivation. Light and dark themes follow the OS and can be overridden.
 
 Signing in with `ADMIN_TOKEN` yields a 7-day HttpOnly cookie. In production, consider putting [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) in front of `/admin*` as a second layer.
 
 The matching REST API lives under `/admin/api/*` and takes `Authorization: Bearer <ADMIN_TOKEN>`, so you can drive it from your own tooling.
+
+### Working on the console
+
+The source lives in [`admin-ui/`](admin-ui). Vite collapses it into one self-contained HTML file, which `scripts/build-admin.mjs` inlines into `src/admin/dashboard.ts` — so deploying the Worker still deploys the console, with no second pipeline and no static-asset binding. That generated file is committed, which means a plain `wrangler deploy` never needs the UI toolchain.
+
+```bash
+npm run admin:install            # once
+npm run admin:dev                # Vite on :5173, proxying /admin/api to wrangler dev on :8787
+npm run admin:build              # rebuild and re-inline — run this before committing UI changes
+```
 
 ## Notifications
 
