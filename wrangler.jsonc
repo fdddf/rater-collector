@@ -1,68 +1,49 @@
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "rater-collector",
-	"main": "src/index.ts",
-	"compatibility_date": "2025-04-01",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
-	"observability": {
-		"enabled": true
-	},
-	// Run `npx wrangler d1 create rater` and paste the returned database_id here.
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "rater",
-			"database_id": "56071dce-5cf0-4d71-847e-8bfee2ec4885",
-			"migrations_dir": "migrations",
-			"remote": true
-		},
-		{
-			"binding": "rater",
-			"database_name": "rater",
-			"database_id": "56071dce-5cf0-4d71-847e-8bfee2ec4885"
-		}
-	],
-	// Create with `npx wrangler r2 bucket create rater-attachments`.
-	"r2_buckets": [
-		{
-			"binding": "ATTACHMENTS",
-			"bucket_name": "rater-attachments",
-			"preview_bucket_name": "rater-attachments-preview"
-		},
-		{
-			"bucket_name": "rater-attachments",
-			"binding": "rater_attachments",
-			"remote": true
-		}
-	],
-	// namespace_id only has to be unique within this Worker — any value will do.
-	"ratelimits": [
-		{
-			"name": "SUBMIT_LIMIT",
-			"namespace_id": "1001",
-			"simple": {
-				"limit": 5,
-				"period": 60
-			}
-		},
-		{
-			"name": "READ_LIMIT",
-			"namespace_id": "1002",
-			"simple": {
-				"limit": 60,
-				"period": 60
-			}
-		}
-	],
-	"vars": {
-		// Prefix for the "view detail" links in notifications. After deploying, change this
-		// to your workers.dev address or custom domain.
-		"PUBLIC_BASE_URL": "http://localhost:8787"
-	}
-	// Secrets (set with `npx wrangler secret put <NAME>`; locally, put them in .dev.vars):
-	//   ADMIN_TOKEN         — password for the admin console
-	//   UPLOAD_HMAC_SECRET  — key used to sign attachment upload tokens
-	//   NOTIFY_WEBHOOK_URL  — optional; new-feedback push target (Slack / Discord / Bark / generic JSON)
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rater-collector",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": { "enabled": true },
+
+  // Created with `npx wrangler d1 create rater`.
+  //
+  // Do not add `"remote": true` here. vitest.config.ts points at this same file, and
+  // test/helpers.ts runs `DELETE FROM` on every table before each test — a remote
+  // binding would aim that at the production database.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rater",
+      "database_id": "56071dce-5cf0-4d71-847e-8bfee2ec4885",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Create with `npx wrangler r2 bucket create rater-attachments`.
+  "r2_buckets": [
+    {
+      "binding": "ATTACHMENTS",
+      "bucket_name": "rater-attachments",
+      "preview_bucket_name": "rater-attachments-preview"
+    }
+  ],
+
+  // namespace_id only has to be unique within this Worker — any value will do.
+  "ratelimits": [
+    { "name": "SUBMIT_LIMIT", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } },
+    { "name": "READ_LIMIT", "namespace_id": "1002", "simple": { "limit": 60, "period": 60 } }
+  ],
+
+  "vars": {
+    // Prefix for the "view detail" links in notifications. After deploying, change this
+    // to your workers.dev address or custom domain.
+    "PUBLIC_BASE_URL": "http://localhost:8787"
+  }
+
+  // Secrets (set with `npx wrangler secret put <NAME>`; locally, put them in .dev.vars):
+  //   ADMIN_TOKEN         — password for the admin console
+  //   UPLOAD_HMAC_SECRET  — key used to sign attachment upload tokens
+  //   NOTIFY_WEBHOOK_URL  — optional; new-feedback push target (Slack / Discord / Bark / generic JSON)
 }
