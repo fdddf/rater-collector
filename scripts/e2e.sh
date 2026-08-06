@@ -3,21 +3,39 @@
 # client makes — every acceptance check that does not require tapping a screen.
 set -uo pipefail
 
-BASE=http://localhost:8787
-ADMIN=dev-admin-token
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+BASE=${RATER_BASE:-http://localhost:8787}
+# Read the password from .dev.vars so it can't drift out of sync with the running
+# server. Override with RATER_ADMIN_TOKEN to point this at a deployed environment.
+ADMIN=${RATER_ADMIN_TOKEN:-$(sed -n "s/^ADMIN_TOKEN[[:space:]]*=[[:space:]]*\"\{0,1\}\([^\"]*\)\"\{0,1\}.*/\1/p" "$ROOT/.dev.vars" 2>/dev/null)}
 PASS=0; FAIL=0
 
 ok()   { PASS=$((PASS+1)); printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad()  { FAIL=$((FAIL+1)); printf '  \033[31m✗\033[0m %s — %s\n' "$1" "$2"; }
 check(){ if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$3], got [$2]"; fi; }
+die()  { printf '\033[31m%s\033[0m\n' "$1" >&2; exit 1; }
+
+# Fail with a sentence rather than letting an empty or non-JSON response reach python
+# as a decoder traceback further down.
+[ -n "$ADMIN" ] || die "No admin password. Put ADMIN_TOKEN in $ROOT/.dev.vars, or set RATER_ADMIN_TOKEN."
+curl -sf "$BASE/health" >/dev/null 2>&1 \
+  || die "Cannot reach $BASE — start the dev server first:  npx wrangler dev"
 
 echo "== register a fresh app =="
 APP_ID="e2e-$(date +%s)"
 REG=$(curl -s -X POST "$BASE/admin/api/apps" \
   -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d "{\"name\":\"E2E App\",\"id\":\"$APP_ID\",\"app_store_id\":\"123456789\"}")
-KEY=$(echo "$REG" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("api_key",""))')
-[ -n "$KEY" ] && ok "registered $APP_ID, got API key" || { bad "registration" "$REG"; exit 1; }
+KEY=$(printf '%s' "$REG" | python3 -c 'import json,sys
+raw = sys.stdin.read()
+try:
+    print(json.loads(raw).get("api_key", ""))
+except ValueError:
+    sys.stderr.write("  server replied with non-JSON: %s\n" % (raw[:200] or "<empty>"))
+')
+[ -n "$KEY" ] || die "Registration failed. Is ADMIN_TOKEN correct? Server said: ${REG:-<empty response>}"
+ok "registered $APP_ID, got API key"
 
 echo
 echo "== 1. config: built-in fallback for a brand-new app =="
