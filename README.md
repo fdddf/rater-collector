@@ -2,7 +2,7 @@
 
 App 评分引导 + 用户反馈收集的服务端：Cloudflare Worker + D1（sqlite）+ R2，自带管理后台。
 
-客户端是一个独立仓库：**[RaterKit](https://github.com/<you>/RaterKit)**（iOS 17+ Swift Package）。典型接入顺序是先部署这里、注册 app 拿到 API Key，再去接客户端。
+客户端是一个独立仓库：**[RaterKit](https://github.com/fdddf/RaterKit)**（iOS 17+ Swift Package）。典型接入顺序是先部署这里、注册 app 拿到 API Key，再去接客户端。
 
 ```
    你的 App ──▶ 预询问弹窗 ──「不喜欢」──▶ 反馈表单
@@ -46,7 +46,7 @@ npx wrangler deploy
 
 注册一个 app，拿到客户端要用的 API Key：
 ```bash
-npm run register-app -- --url https://rater-collector.<你的账号>.workers.dev --name "My App" --app-store-id 123456789
+npm run register-app -- --url https://rater-collector.<你的-cf-子域>.workers.dev --name "My App" --app-store-id 123456789
 ```
 也可以直接在 `/admin` 的「应用」页点注册。**API Key 只显示一次**，库里只存 SHA-256。
 
