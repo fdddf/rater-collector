@@ -46,6 +46,26 @@ Point `PUBLIC_BASE_URL` in `wrangler.jsonc` at your deployed address, then:
 npx wrangler deploy
 ```
 
+### Automatic deploys from GitHub
+
+Instead of running `wrangler deploy` by hand, connect the repository under
+**Workers & Pages → your Worker → Settings → Builds** and every push to `main` builds and
+deploys. Three things matter:
+
+- The Worker's name in the dashboard must equal `name` in `wrangler.jsonc` (`rater-collector`),
+  or the build fails.
+- Leave **Root directory** empty — the Worker lives at the repository root.
+- Set **Deploy command** to `npm run deploy`. That runs the D1 migrations before deploying,
+  so a schema change ships with the code that needs it. Migrations are tracked in D1 and
+  skipped if already applied.
+
+Non-production branches default to `npx wrangler versions upload`, which builds a preview
+version without promoting it — and deliberately without running migrations, so a feature
+branch can never migrate the production database.
+
+Secrets set with `wrangler secret put` live on the Worker and survive deploys; they don't
+need to be added to the build. Build variables are a separate, build-time-only thing.
+
 Register an app to get the API key the client needs:
 ```bash
 npm run register-app -- --url https://rater-collector.<your-cf-subdomain>.workers.dev --name "My App" --app-store-id 123456789

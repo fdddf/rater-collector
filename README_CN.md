@@ -46,6 +46,22 @@ npx wrangler secret put ADMIN_TOKEN && npx wrangler secret put UPLOAD_HMAC_SECRE
 npx wrangler deploy
 ```
 
+### 用 GitHub 自动部署
+
+不想每次手动 `wrangler deploy` 的话，在 **Workers & Pages → 你的 Worker → Settings → Builds**
+里接上仓库，之后推到 `main` 就自动构建部署。三个要点：
+
+- 面板里 Worker 的名字必须和 `wrangler.jsonc` 里的 `name` 一致（`rater-collector`），否则构建失败。
+- **Root directory** 留空 —— Worker 就在仓库根目录。
+- **Deploy command** 填 `npm run deploy`。它会先跑 D1 migration 再部署，保证改了表结构的代码
+  和表结构一起上线。migration 有记录，已经应用过的会跳过。
+
+非生产分支默认是 `npx wrangler versions upload`，只构建预览版本不提升为正式部署，
+**也刻意不跑 migration** —— 免得一个功能分支把生产库给迁移了。
+
+用 `wrangler secret put` 设的 secret 存在 Worker 上，部署不会清掉，不需要加到构建里。
+Build variables 是另一回事，只在构建期可见。
+
 注册一个 app，拿到客户端要用的 API Key：
 ```bash
 npm run register-app -- --url https://rater-collector.<你的-cf-子域>.workers.dev --name "My App" --app-store-id 123456789

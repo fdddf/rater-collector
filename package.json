@@ -5,12 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler types && wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "npm run migrate:remote && wrangler deploy",
     "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p test",
     "test": "wrangler types && vitest run",
     "test:watch": "vitest",
-    "migrate:local": "wrangler d1 migrations apply rater --local",
-    "migrate:remote": "wrangler d1 migrations apply rater --remote",
+    "migrate:local": "wrangler d1 migrations apply DB --local",
+    "migrate:remote": "wrangler d1 migrations apply DB --remote",
     "register-app": "node scripts/register-app.mjs",
     "e2e": "bash scripts/e2e.sh",
     "cf-typegen": "wrangler types"
