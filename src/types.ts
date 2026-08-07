@@ -2,7 +2,8 @@
  * Binding types (DB, ATTACHMENTS, the rate limiters, secrets) are generated from
  * wrangler.jsonc into worker-configuration.d.ts by `wrangler types`, so this is only
  * an alias — edit wrangler.jsonc, regenerate, and there is nothing to keep in sync
- * by hand.
+ * by hand. The exception is the required secrets, which live in no config file and so
+ * are declared in src/env.d.ts.
  */
 export type Env = Cloudflare.Env;
 
