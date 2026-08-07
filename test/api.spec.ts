@@ -708,6 +708,172 @@ describe('admin console', () => {
   });
 });
 
+describe('deleting feedback', () => {
+  /** Runs the full submission with one screenshot and returns the feedback id and its R2 key. */
+  async function submitWithScreenshot(): Promise<{ id: string; key: string }> {
+    const created = await request('/v1/feedback', {
+      method: 'POST', headers: clientHeaders,
+      body: JSON.stringify(validBody({ attachment_count: 1 })),
+    });
+    const { id, upload_token } = await created.json<{ id: string; upload_token: string }>();
+
+    const uploaded = await request(`/v1/feedback/${id}/attachments/0`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${upload_token}`, 'Content-Type': 'image/png' },
+      body: tinyPNG(),
+    });
+    const { key } = await uploaded.json<{ key: string }>();
+
+    await request(`/v1/feedback/${id}/complete`, { method: 'POST', headers: clientHeaders });
+    return { id, key };
+  }
+
+  it('takes the screenshot out of R2 along with the rows', async () => {
+    const { id, key } = await submitWithScreenshot();
+    expect(await env.ATTACHMENTS.get(key)).not.toBeNull();
+
+    const res = await request(`/admin/api/feedback/${id}`, {
+      method: 'DELETE', headers: adminHeaders,
+    });
+    expect(res.status).toBe(200);
+
+    expect(await env.ATTACHMENTS.get(key)).toBeNull();
+    expect(await env.DB.prepare('SELECT id FROM feedback WHERE id = ?').bind(id).first()).toBeNull();
+    expect(
+      await env.DB.prepare('SELECT id FROM attachments WHERE feedback_id = ?').bind(id).first(),
+    ).toBeNull();
+  });
+
+  it('returns 404 for an unknown id', async () => {
+    const res = await request('/admin/api/feedback/fb_nope', {
+      method: 'DELETE', headers: adminHeaders,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('deletes several at once and leaves the rest alone', async () => {
+    const doomed = [await submitFeedback(), await submitFeedback()];
+    const keeper = await submitFeedback();
+
+    const res = await request('/admin/api/feedback/bulk-delete', {
+      method: 'POST', headers: adminHeaders, body: JSON.stringify({ ids: doomed }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json<any>()).deleted).toBe(2);
+
+    const { items } = await (await request('/admin/api/feedback', { headers: adminHeaders }))
+      .json<any>();
+    expect(items.map((f: any) => f.id)).toEqual([keeper]);
+  });
+
+  it('rejects an empty id list', async () => {
+    const res = await request('/admin/api/feedback/bulk-delete', {
+      method: 'POST', headers: adminHeaders, body: JSON.stringify({ ids: [] }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('resetting app stats', () => {
+  it('clears telemetry and leaves feedback standing', async () => {
+    await request('/v1/telemetry', {
+      method: 'POST', headers: clientHeaders,
+      body: JSON.stringify({ events: [{ kind: 'shown' }, { kind: 'positive' }] }),
+    });
+    await submitFeedback();
+
+    const res = await request(`/admin/api/apps/${TEST_APP_ID}/reset-stats`, {
+      method: 'POST', headers: adminHeaders,
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json<any>()).deleted).toBe(2);
+
+    const stats = await (await request(`/admin/api/stats?app_id=${TEST_APP_ID}`, {
+      headers: adminHeaders,
+    })).json<any>();
+    expect(stats.funnel.shown).toBe(0);
+    expect(stats.feedback_by_status.open).toBe(1);
+  });
+
+  it('leaves another app’s telemetry alone', async () => {
+    const otherKey = 'rtr_pub_otherkey000000000000000000000';
+    await seedApp('other-app', otherKey);
+    await request('/v1/telemetry', {
+      method: 'POST',
+      headers: { 'X-Rater-Key': otherKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: [{ kind: 'shown' }] }),
+    });
+
+    await request(`/admin/api/apps/${TEST_APP_ID}/reset-stats`, {
+      method: 'POST', headers: adminHeaders,
+    });
+
+    const stats = await (await request('/admin/api/stats?app_id=other-app', {
+      headers: adminHeaders,
+    })).json<any>();
+    expect(stats.funnel.shown).toBe(1);
+  });
+
+  it('returns 404 for an unknown app', async () => {
+    const res = await request('/admin/api/apps/nope/reset-stats', {
+      method: 'POST', headers: adminHeaders,
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('translating copy', () => {
+  const draft = {
+    locale: 'en', min_app_version: '0', title: 'Enjoying this?', message: 'Tell us.',
+    positive_label: 'Yes', negative_label: 'Not really', later_label: 'Later',
+    // The console sends explicit nulls for "no copy" and "no overrides" — these used to
+    // be rejected because the schema was optional rather than nullish.
+    feedback_title: null, feedback_message: null, rules: null,
+    categories: [{ id: 'bug', label: 'Something is broken' }],
+  };
+
+  it('accepts a draft whose optional fields are explicitly null', async () => {
+    const res = await request(`/admin/api/apps/${TEST_APP_ID}/prompts`, {
+      method: 'PUT', headers: adminHeaders, body: JSON.stringify(draft),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('reports a missing API key rather than failing at the provider', async () => {
+    const res = await request(`/admin/api/apps/${TEST_APP_ID}/prompts/translate`, {
+      method: 'POST', headers: adminHeaders,
+      body: JSON.stringify({ source: draft, target_locales: ['ja'] }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json<any>()).error.message).toContain('TRANSLATE_API_KEY');
+  });
+
+  it('returns 404 before spending anything on an unknown app', async () => {
+    const res = await request('/admin/api/apps/nope/prompts/translate', {
+      method: 'POST', headers: adminHeaders,
+      body: JSON.stringify({ source: draft, target_locales: ['ja'] }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('caps the number of locales in one request', async () => {
+    const res = await request(`/admin/api/apps/${TEST_APP_ID}/prompts/translate`, {
+      method: 'POST', headers: adminHeaders,
+      body: JSON.stringify({
+        source: draft,
+        target_locales: Array.from({ length: 20 }, (_, i) => `l${i}`),
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('reports whether translation is configured', async () => {
+    const res = await request('/admin/api/settings', { headers: adminHeaders });
+    expect(res.status).toBe(200);
+    expect((await res.json<any>()).translate_enabled).toBe(false);
+  });
+});
+
 describe('rate limiting', () => {
   it('blocks a burst of submissions from one IP', async () => {
     const ip = '198.51.100.7';

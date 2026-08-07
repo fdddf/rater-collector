@@ -150,11 +150,35 @@ Batched `shown` / `positive` / `negative` / `dismissed` / `submitted` events, us
 
 ## Admin console
 
-`GET /admin` serves a React + TypeScript + Tailwind console. It covers feedback browsing and filtering, detail with screenshot previews, status and internal notes, conversion funnel stats, **live copy editing**, and app registration and deactivation. Light and dark themes follow the OS and can be overridden.
+`GET /admin` serves a React + TypeScript + Tailwind console. It covers feedback browsing and filtering, detail with screenshot previews, status and internal notes, single and bulk deletion (screenshots included, straight out of R2), conversion funnel stats with a per-app reset, **live copy editing** and batch translation, and app registration and deactivation. Light and dark themes follow the OS and can be overridden.
 
 Signing in with `ADMIN_TOKEN` yields a 7-day HttpOnly cookie. In production, consider putting [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) in front of `/admin*` as a second layer.
 
 The matching REST API lives under `/admin/api/*` and takes `Authorization: Bearer <ADMIN_TOKEN>`, so you can drive it from your own tooling.
+
+### Localising the copy
+
+Adding copy lets you pick **several languages at once** — one row is written per language with the copy you typed, ready to be edited or translated. Any row can also be duplicated into new locales, so a second language never means retyping a dozen fields.
+
+With a translation key configured, the **Translate** action on a row machine-translates it into as many as 12 languages in one go. Category *ids* are the client's lookup keys and are never touched — only the labels are translated — and the results are shown for review, not saved: nothing reaches the database until you have read the copy and pressed Save.
+
+Two providers are supported, configured with secrets. Anthropic:
+
+```bash
+npx wrangler secret put TRANSLATE_API_KEY     # sk-ant-...
+# optional: TRANSLATE_MODEL (defaults to claude-opus-5)
+```
+
+Or anything speaking the OpenAI chat-completions dialect — DeepSeek, Moonshot, Qwen, OpenRouter, a local server:
+
+```bash
+npx wrangler secret put TRANSLATE_PROVIDER    # openai
+npx wrangler secret put TRANSLATE_API_KEY
+npx wrangler secret put TRANSLATE_MODEL       # required — every vendor names its models differently
+npx wrangler secret put TRANSLATE_BASE_URL    # e.g. https://api.deepseek.com/v1
+```
+
+Leave `TRANSLATE_API_KEY` unset and the Translate button simply doesn't appear; everything else in the console works as before.
 
 ### Working on the console
 

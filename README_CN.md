@@ -146,11 +146,35 @@ npm run e2e
 
 ## 管理后台
 
-`GET /admin` 是一个 React + TypeScript + Tailwind 写的控制台：反馈列表与筛选、详情与截图预览、状态与备注、转化漏斗统计、**在线改文案**、应用注册与停用。明暗主题跟随系统，也可以手动切换。
+`GET /admin` 是一个 React + TypeScript + Tailwind 写的控制台：反馈列表与筛选、详情与截图预览、状态与备注、单条或批量删除（连同 R2 里的截图一起清掉）、转化漏斗统计与按应用重置、**在线改文案**及多语言翻译、应用注册与停用。明暗主题跟随系统，也可以手动切换。
 
 用 `ADMIN_TOKEN` 登录换一个 7 天的 HttpOnly cookie。生产环境建议在 `/admin*` 前再叠一层 [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)。
 
 对应的 REST 接口在 `/admin/api/*`，用 `Authorization: Bearer <ADMIN_TOKEN>` 调用，可以接自己的工具。
+
+### 文案多语言
+
+新增文案时**语言可以多选**，每种语言各写一行，内容就是你填的那份，之后再逐个改或翻译。已有的行也能直接复制成新语言的行，加第二种语言不用把十几个字段重敲一遍。
+
+配好翻译密钥后，每行会多一个**翻译**动作，一次最多译 12 种语言。分类的 `id` 是客户端匹配用的键，全程不动，只翻 label；结果只作为草稿列出来给你过目，**在你按保存之前不会写库**。
+
+支持两种服务商，都用 secret 配置。Anthropic：
+
+```bash
+npx wrangler secret put TRANSLATE_API_KEY     # sk-ant-...
+# 可选：TRANSLATE_MODEL（默认 claude-opus-5）
+```
+
+或者任何 OpenAI 兼容接口 —— DeepSeek、Moonshot、通义千问、OpenRouter、本地起的服务都行：
+
+```bash
+npx wrangler secret put TRANSLATE_PROVIDER    # openai
+npx wrangler secret put TRANSLATE_API_KEY
+npx wrangler secret put TRANSLATE_MODEL       # 必填 —— 各家模型名都不一样，没法给默认值
+npx wrangler secret put TRANSLATE_BASE_URL    # 例如 https://api.deepseek.com/v1
+```
+
+不设 `TRANSLATE_API_KEY` 的话翻译按钮不会出现，后台其余功能照常。
 
 ### 改后台界面
 

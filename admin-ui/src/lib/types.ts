@@ -83,6 +83,17 @@ export interface PromptConfig {
 export type PromptDraft = Omit<PromptConfig, 'id' | 'app_id' | 'updated_at'> &
   Partial<Pick<PromptConfig, 'id'>>;
 
+/** Server capabilities, so the console can hide what isn't wired up. */
+export interface Settings {
+  translate_enabled: boolean;
+}
+
+/** Machine translations awaiting review — `prompts` are unsaved drafts, one per locale that succeeded. */
+export interface TranslateResult {
+  prompts: PromptDraft[];
+  errors: { locale: string; message: string }[];
+}
+
 export interface Stats {
   days: number;
   funnel: {

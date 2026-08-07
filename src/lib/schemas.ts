@@ -62,8 +62,10 @@ export const promptConfigUpsertSchema = z.object({
   positive_label: z.string().trim().min(1).max(80),
   negative_label: z.string().trim().min(1).max(80),
   later_label: z.string().trim().min(1).max(80),
-  feedback_title: shortText(200).optional(),
-  feedback_message: shortText(1000).optional(),
+  // nullish, not optional: both the console editor and the translator send an explicit
+  // null for "no feedback copy", and `.optional()` alone rejects null.
+  feedback_title: shortText(200).nullish(),
+  feedback_message: shortText(1000).nullish(),
   categories: z
     .array(z.object({ id: shortText(64), label: z.string().trim().min(1).max(80) }))
     .max(12)
@@ -78,7 +80,22 @@ export const promptConfigUpsertSchema = z.object({
       cooldown_days: z.number().int().min(0).max(3650).optional(),
       max_prompts_per_version: z.number().int().min(0).max(100).optional(),
     })
-    .optional(),
+    .nullish(),
+});
+
+/**
+ * Request body for the batch translator. The source is a full draft rather than a saved
+ * row id so the console can translate copy the admin hasn't committed yet; everything
+ * except `locale` is carried through to the returned drafts unchanged.
+ */
+export const promptTranslateSchema = z.object({
+  source: promptConfigUpsertSchema,
+  target_locales: z.array(z.string().trim().min(1).max(32)).min(1).max(12),
+});
+
+/** Request body for deleting several feedback records at once. */
+export const feedbackBulkDeleteSchema = z.object({
+  ids: z.array(z.string().trim().min(1).max(64)).min(1).max(100),
 });
 
 export const feedbackPatchSchema = z

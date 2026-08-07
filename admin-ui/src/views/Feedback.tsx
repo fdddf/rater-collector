@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Inbox, Paperclip, Search } from 'lucide-react';
+import { Inbox, Paperclip, Search, Trash2 } from 'lucide-react';
 import { api, UnauthorizedError } from '../lib/api';
 import { fmtRelative, fmtTime } from '../lib/format';
 import type { FeedbackRow } from '../lib/types';
@@ -16,6 +16,8 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
   const [cursor, setCursor] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [openID, setOpenID] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   // The debounce timer is a ref so re-renders don't restart it.
   const debounce = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -27,6 +29,8 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
         const data = await api.feedback({ app_id: appID, status, q: query.trim(), before });
         setRows((prev) => (before === null ? data.items : [...prev, ...data.items]));
         setCursor(data.next_before);
+        // A first page replaces the list, so anything ticked before it is gone from view.
+        if (before === null) setSelected(new Set());
       } catch (err) {
         if (err instanceof UnauthorizedError) return onUnauthorized();
         toast(err instanceof Error ? err.message : 'Failed to load feedback', 'error');
@@ -36,6 +40,40 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
     },
     [appID, status, query, toast, onUnauthorized],
   );
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
+
+  const allSelected = rows.length > 0 && selected.size === rows.length;
+
+  async function removeSelected() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    if (
+      !confirm(
+        `Delete ${ids.length} feedback record${ids.length > 1 ? 's' : ''} permanently?\n\n` +
+          'Any attached screenshots are deleted from storage too. This cannot be undone.',
+      )
+    ) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const { deleted } = await api.bulkDeleteFeedback(ids);
+      toast(`Deleted ${deleted}`);
+      load(null);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return onUnauthorized();
+      toast(err instanceof Error ? err.message : 'Delete failed', 'error');
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   // Typing in the search box shouldn't fire a request per keystroke.
   useEffect(() => {
@@ -72,6 +110,21 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
         <Button onClick={() => load(null)} busy={loading && rows.length === 0}>
           Refresh
         </Button>
+        {selected.size > 0 && (
+          <div className="flex items-center gap-2 border-l border-border pl-2">
+            <span className="text-sm text-ink-2 tnum">{selected.size} selected</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              busy={deleting}
+              onClick={removeSelected}
+              className="text-critical hover:text-critical"
+            >
+              <Trash2 className="size-4" />
+              Delete
+            </Button>
+          </div>
+        )}
       </Card>
 
       <Card className="overflow-hidden">
@@ -90,6 +143,17 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
             <table className="w-full min-w-3xl text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs font-medium text-ink-2">
+                  <th className="w-0 py-2.5 pl-4">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all loaded feedback"
+                      className="size-4 accent-[var(--accent)] rounded-sm border-border align-middle"
+                      checked={allSelected}
+                      onChange={() =>
+                        setSelected(allSelected ? new Set() : new Set(rows.map((f) => f.id)))
+                      }
+                    />
+                  </th>
                   <th className="px-4 py-2.5 font-medium">When</th>
                   <th className="px-4 py-2.5 font-medium">App</th>
                   <th className="px-4 py-2.5 font-medium">Message</th>
@@ -106,6 +170,16 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
                     onKeyDown={(e) => e.key === 'Enter' && setOpenID(f.id)}
                     className="cursor-pointer border-b border-border/70 transition-colors last:border-0 hover:bg-surface-2 focus-visible:bg-surface-2"
                   >
+                    {/* Ticking a row must not also open it, hence swallowing the click here. */}
+                    <td className="py-3 pl-4 align-top" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select feedback from ${fmtTime(f.created_at)}`}
+                        className="size-4 accent-[var(--accent)] rounded-sm border-border align-middle"
+                        checked={selected.has(f.id)}
+                        onChange={() => toggleOne(f.id)}
+                      />
+                    </td>
                     <td className="px-4 py-3 align-top whitespace-nowrap text-ink-2 tnum">
                       <span title={fmtTime(f.created_at)}>{fmtRelative(f.created_at)}</span>
                     </td>
@@ -150,7 +224,7 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
       <FeedbackDetail
         id={openID}
         onClose={() => setOpenID(null)}
-        onSaved={() => {
+        onChanged={() => {
           setOpenID(null);
           load(null);
         }}

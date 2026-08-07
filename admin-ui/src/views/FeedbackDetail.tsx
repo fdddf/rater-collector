@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Mail } from 'lucide-react';
+import { Mail, Trash2 } from 'lucide-react';
 import { api, attachmentURL, UnauthorizedError } from '../lib/api';
 import { fmtBytes, fmtTime } from '../lib/format';
 import type { Attachment, FeedbackDetail as Detail, FeedbackStatus } from '../lib/types';
@@ -31,12 +31,13 @@ function diagnostics(f: Detail): [string, string][] {
 export default function FeedbackDetail({
   id,
   onClose,
-  onSaved,
+  onChanged,
   onUnauthorized,
 }: {
   id: string | null;
   onClose: () => void;
-  onSaved: () => void;
+  /** Fired after a save or a delete — the list behind the dialog has to reload either way. */
+  onChanged: () => void;
   onUnauthorized: () => void;
 }) {
   const toast = useToast();
@@ -45,6 +46,7 @@ export default function FeedbackDetail({
   const [status, setStatus] = useState<string>('open');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // The parent passes these as inline arrows, so their identity changes on every one of its
   // renders — including the ones the list itself triggers. Reading them through a ref keeps
@@ -87,12 +89,36 @@ export default function FeedbackDetail({
     try {
       await api.patchFeedback(id, { status, admin_note: note });
       toast('Saved');
-      onSaved();
+      onChanged();
     } catch (err) {
       if (err instanceof UnauthorizedError) return onUnauthorized();
       toast(err instanceof Error ? err.message : 'Save failed', 'error');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!id) return;
+    const shots = attachments.length;
+    if (
+      !confirm(
+        'Delete this feedback permanently?' +
+          (shots > 0 ? `\n\nIts ${shots} screenshot${shots > 1 ? 's' : ''} will be deleted too.` : ''),
+      )
+    ) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      await api.deleteFeedback(id);
+      toast('Deleted');
+      onChanged();
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return onUnauthorized();
+      toast(err instanceof Error ? err.message : 'Delete failed', 'error');
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -123,12 +149,21 @@ export default function FeedbackDetail({
             {detail.email && (
               <a
                 href={`mailto:${detail.email}?subject=${encodeURIComponent(`Re: your feedback · ${detail.app_name}`)}`}
-                className="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg px-3.5 text-sm font-medium text-ink-2 ring-1 ring-border ring-inset transition-colors hover:bg-surface-2 hover:text-ink"
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3.5 text-sm font-medium text-ink-2 ring-1 ring-border ring-inset transition-colors hover:bg-surface-2 hover:text-ink"
               >
                 <Mail className="size-4" />
                 Reply by email
               </a>
             )}
+            <Button
+              variant="ghost"
+              busy={deleting}
+              onClick={remove}
+              className="ml-auto text-critical hover:text-critical"
+            >
+              <Trash2 className="size-4" />
+              Delete
+            </Button>
           </>
         ) : undefined
       }

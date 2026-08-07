@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Copy, KeyRound, Plus } from 'lucide-react';
+import { Check, Copy, KeyRound, Plus, RotateCcw } from 'lucide-react';
 import { api, UnauthorizedError } from '../lib/api';
 import { fmtTime } from '../lib/format';
 import type { App, NewAppResult } from '../lib/types';
@@ -28,6 +28,7 @@ export default function Apps({
   const [id, setId] = useState('');
   const [storeID, setStoreID] = useState('');
   const [busy, setBusy] = useState(false);
+  const [resetting, setResetting] = useState<string | null>(null);
   const [created, setCreated] = useState<NewAppResult | null>(null);
 
   async function create() {
@@ -62,6 +63,29 @@ export default function Apps({
     }
   }
 
+  async function resetStats(app: App) {
+    if (
+      !confirm(
+        `Reset the prompt funnel for "${app.name}"?\n\n` +
+          'Every shown / positive / negative / dismissed / submitted event recorded for this ' +
+          'app is deleted and the funnel starts from zero. Feedback and its screenshots are ' +
+          'left untouched.',
+      )
+    ) {
+      return;
+    }
+    setResetting(app.id);
+    try {
+      const { deleted } = await api.resetStats(app.id);
+      toast(`Funnel reset — ${deleted.toLocaleString()} events cleared`);
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return onUnauthorized();
+      toast(err instanceof Error ? err.message : 'Reset failed', 'error');
+    } finally {
+      setResetting(null);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <Card className="overflow-hidden">
@@ -87,10 +111,22 @@ export default function Apps({
                   <td className="px-4 py-3">
                     {a.enabled ? <Badge tone="resolved">Enabled</Badge> : <Badge tone="spam">Disabled</Badge>}
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <Button size="sm" onClick={() => toggle(a)}>
-                      {a.enabled ? 'Disable' : 'Enable'}
-                    </Button>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        busy={resetting === a.id}
+                        onClick={() => resetStats(a)}
+                        title="Delete this app's prompt funnel events and start counting from zero"
+                      >
+                        <RotateCcw className="size-4" />
+                        Reset stats
+                      </Button>
+                      <Button size="sm" onClick={() => toggle(a)}>
+                        {a.enabled ? 'Disable' : 'Enable'}
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}

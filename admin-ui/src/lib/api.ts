@@ -6,7 +6,9 @@ import type {
   NewAppResult,
   PromptConfig,
   PromptDraft,
+  Settings,
   Stats,
+  TranslateResult,
 } from './types';
 
 /** Thrown on a 401 so callers can bounce back to the sign-in screen instead of showing a toast. */
@@ -44,17 +46,23 @@ export const api = {
   login: (token: string) => send<{ ok: true }>('POST', '/login', { token }),
   logout: () => send<{ ok: true }>('POST', '/logout'),
 
+  settings: () => request<Settings>('/settings'),
+
   apps: () => request<{ apps: App[] }>('/apps'),
   createApp: (body: { name: string; id?: string; app_store_id?: string }) =>
     send<NewAppResult>('POST', '/apps', body),
   patchApp: (id: string, body: { enabled?: boolean; name?: string; app_store_id?: string | null }) =>
     send<{ ok: true }>('PATCH', `/apps/${encodeURIComponent(id)}`, body),
+  resetStats: (id: string) =>
+    send<{ ok: true; deleted: number }>('POST', `/apps/${encodeURIComponent(id)}/reset-stats`),
 
   prompts: (appID: string) =>
     request<{ prompts: PromptConfig[] }>(`/apps/${encodeURIComponent(appID)}/prompts`),
   putPrompt: (appID: string, body: PromptDraft) =>
     send<{ ok: true }>('PUT', `/apps/${encodeURIComponent(appID)}/prompts`, body),
   deletePrompt: (id: string) => send<{ ok: true }>('DELETE', `/prompts/${encodeURIComponent(id)}`),
+  translatePrompts: (appID: string, body: { source: PromptDraft; target_locales: string[] }) =>
+    send<TranslateResult>('POST', `/apps/${encodeURIComponent(appID)}/prompts/translate`, body),
 
   feedback: (query: FeedbackQuery) => {
     const p = new URLSearchParams();
@@ -67,6 +75,10 @@ export const api = {
     ),
   patchFeedback: (id: string, body: { status?: string; admin_note?: string }) =>
     send<{ ok: true }>('PATCH', `/feedback/${encodeURIComponent(id)}`, body),
+  deleteFeedback: (id: string) =>
+    send<{ ok: true; deleted: number }>('DELETE', `/feedback/${encodeURIComponent(id)}`),
+  bulkDeleteFeedback: (ids: string[]) =>
+    send<{ ok: true; deleted: number }>('POST', '/feedback/bulk-delete', { ids }),
 
   stats: (query: { days: number; app_id?: string }) => {
     const p = new URLSearchParams({ days: String(query.days) });

@@ -2,7 +2,18 @@ import { Hono } from 'hono';
 import { requireAdmin } from '../middleware/auth';
 import { newID, sha256Hex, timingSafeEqual } from '../lib/crypto';
 import { Errors } from '../lib/errors';
-import { feedbackPatchSchema, promptConfigUpsertSchema } from '../lib/schemas';
+import {
+  feedbackBulkDeleteSchema,
+  feedbackPatchSchema,
+  promptConfigUpsertSchema,
+  promptTranslateSchema,
+} from '../lib/schemas';
+import {
+  translateConfig,
+  translateConfigured,
+  translateCopy,
+  type TranslatableCopy,
+} from '../lib/translate';
 import { dashboardHTML } from '../admin/dashboard';
 import type { HonoEnv } from '../types';
 
@@ -49,6 +60,9 @@ adminRoutes.post('/api/logout', (c) =>
  */
 const api = new Hono<HonoEnv>();
 api.use('*', requireAdmin);
+
+/** Server capabilities the console has to know about before it can render — currently just whether the translator has an API key. */
+api.get('/settings', (c) => c.json({ translate_enabled: translateConfigured(c.env) }));
 
 // ── Apps ─────────────────────────────────────────────────────────────────────
 
@@ -106,6 +120,22 @@ api.patch('/apps/:id', async (c) => {
     .run();
   if (res.meta.changes === 0) throw Errors.notFound('No such app.');
   return c.json({ ok: true });
+});
+
+/**
+ * Clears the prompt funnel for one app.
+ *
+ * Telemetry only. The Stats page also charts feedback volume, but feedback is real user
+ * writing — throwing it away is a separate, deliberate act (DELETE /feedback/:id), not a
+ * side effect of resetting a counter.
+ */
+api.post('/apps/:id/reset-stats', async (c) => {
+  const appID = c.req.param('id');
+  const app = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?').bind(appID).first();
+  if (!app) throw Errors.notFound('No such app.');
+
+  const res = await c.env.DB.prepare('DELETE FROM telemetry WHERE app_id = ?').bind(appID).run();
+  return c.json({ ok: true, deleted: res.meta.changes });
 });
 
 // ── Prompt configs (server-side copy) ─────────────────────────────────────────
@@ -179,6 +209,81 @@ api.put('/apps/:id/prompts', async (c) => {
     .run();
 
   return c.json({ ok: true });
+});
+
+/**
+ * Machine-translates one draft into several locales and hands the results back *without*
+ * saving them. Copy is the first thing a user reads, so a human approves it in the editor
+ * before it reaches `prompt_configs`.
+ *
+ * Locales are translated concurrently and settled independently — one provider hiccup
+ * shouldn't discard eleven good translations.
+ */
+api.post('/apps/:id/prompts/translate', async (c) => {
+  const appID = c.req.param('id');
+  const app = await c.env.DB.prepare('SELECT id FROM apps WHERE id = ?').bind(appID).first();
+  if (!app) throw Errors.notFound('No such app.');
+
+  // Before the fan-out below, so a missing key is one 400 naming the variable rather than
+  // a 200 carrying the same failure once per locale.
+  const config = translateConfig(c.env);
+
+  const parsed = promptTranslateSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    throw Errors.badRequest(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
+  }
+  const { source, target_locales } = parsed.data;
+
+  const copy: TranslatableCopy = {
+    title: source.title,
+    message: source.message,
+    positive_label: source.positive_label,
+    negative_label: source.negative_label,
+    later_label: source.later_label,
+    feedback_title: source.feedback_title ?? '',
+    feedback_message: source.feedback_message ?? '',
+    category_labels: source.categories.map((cat) => cat.label),
+  };
+
+  const locales = [...new Set(target_locales)];
+  const settled = await Promise.allSettled(locales.map((l) => translateCopy(config, copy, l)));
+
+  const prompts = [];
+  const errors: { locale: string; message: string }[] = [];
+  for (const [i, outcome] of settled.entries()) {
+    const locale = locales[i]!;
+    if (outcome.status === 'rejected') {
+      const reason = outcome.reason as unknown;
+      errors.push({
+        locale,
+        message: reason instanceof Error ? reason.message : String(reason),
+      });
+      continue;
+    }
+    const t = outcome.value;
+    prompts.push({
+      locale,
+      min_app_version: source.min_app_version,
+      enabled: source.enabled,
+      variant: source.variant,
+      title: t.title,
+      message: t.message,
+      positive_label: t.positive_label,
+      negative_label: t.negative_label,
+      later_label: t.later_label,
+      feedback_title: t.feedback_title || null,
+      feedback_message: t.feedback_message || null,
+      // Ids are the client's lookup keys and are never translated — only the labels move.
+      categories: source.categories.map((cat, idx) => ({
+        id: cat.id,
+        label: t.category_labels[idx] ?? cat.label,
+      })),
+      email_required: source.email_required,
+      rules: source.rules ?? null,
+    });
+  }
+
+  return c.json({ prompts, errors });
 });
 
 api.delete('/prompts/:pid', async (c) => {
@@ -266,6 +371,52 @@ api.patch('/feedback/:id', async (c) => {
   if (res.meta.changes === 0) throw Errors.notFound('No such feedback.');
   return c.json({ ok: true });
 });
+
+api.delete('/feedback/:id', async (c) => {
+  const deleted = await deleteFeedback(c.env, [c.req.param('id')]);
+  if (deleted === 0) throw Errors.notFound('No such feedback.');
+  return c.json({ ok: true, deleted });
+});
+
+/** Bulk delete, so clearing out a spam wave doesn't mean a hundred round trips. */
+api.post('/feedback/bulk-delete', async (c) => {
+  const parsed = feedbackBulkDeleteSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    throw Errors.badRequest(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
+  }
+  return c.json({ ok: true, deleted: await deleteFeedback(c.env, parsed.data.ids) });
+});
+
+/**
+ * Deletes feedback rows and the screenshots behind them.
+ *
+ * Order matters: the R2 keys only exist in the `attachments` rows, so they have to be
+ * read and the objects dropped *before* the rows go — reversing it strands the images in
+ * the bucket with nothing left pointing at them.
+ */
+async function deleteFeedback(env: HonoEnv['Bindings'], ids: string[]): Promise<number> {
+  const placeholders = ids.map(() => '?').join(',');
+
+  const { results } = await env.DB.prepare(
+    `SELECT r2_key FROM attachments WHERE feedback_id IN (${placeholders})`,
+  )
+    .bind(...ids)
+    .all<{ r2_key: string }>();
+
+  const keys = (results ?? []).map((r) => r.r2_key);
+  if (keys.length > 0) await env.ATTACHMENTS.delete(keys);
+
+  // ON DELETE CASCADE would cover the attachment rows, but foreign-key enforcement is a
+  // database setting rather than something this code controls — so say it explicitly.
+  await env.DB.prepare(`DELETE FROM attachments WHERE feedback_id IN (${placeholders})`)
+    .bind(...ids)
+    .run();
+
+  const res = await env.DB.prepare(`DELETE FROM feedback WHERE id IN (${placeholders})`)
+    .bind(...ids)
+    .run();
+  return res.meta.changes;
+}
 
 /** Serves the original image from R2. Keys contain slashes, hence the wildcard route. */
 api.get('/attachments/:key{.+}', async (c) => {

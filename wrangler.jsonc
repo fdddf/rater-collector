@@ -46,4 +46,8 @@
   //   ADMIN_TOKEN         — password for the admin console
   //   UPLOAD_HMAC_SECRET  — key used to sign attachment upload tokens
   //   NOTIFY_WEBHOOK_URL  — optional; new-feedback push target (Slack / Discord / Bark / generic JSON)
+  //   TRANSLATE_API_KEY   — optional; enables batch translation of prompt copy
+  //   TRANSLATE_PROVIDER  — optional; "anthropic" (default) or "openai"
+  //   TRANSLATE_MODEL     — optional for anthropic, required for openai
+  //   TRANSLATE_BASE_URL  — optional; base URL of an OpenAI-compatible endpoint
 }

@@ -2,3 +2,10 @@
 ADMIN_TOKEN="dev-admin-token"
 UPLOAD_HMAC_SECRET="dev-upload-secret-change-me"
 # NOTIFY_WEBHOOK_URL="https://hooks.slack.com/services/xxx"
+
+# Batch translation of prompt copy. Without TRANSLATE_API_KEY the console hides the
+# Translate button; everything else works.
+# TRANSLATE_PROVIDER="anthropic"          # anthropic (default) | openai
+# TRANSLATE_API_KEY="sk-ant-..."
+# TRANSLATE_MODEL="claude-opus-5"         # required when provider is openai
+# TRANSLATE_BASE_URL="https://api.deepseek.com/v1"   # any OpenAI-compatible endpoint
