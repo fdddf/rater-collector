@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Mail } from 'lucide-react';
 import { api, attachmentURL, UnauthorizedError } from '../lib/api';
 import { fmtBytes, fmtTime } from '../lib/format';
@@ -46,6 +46,13 @@ export default function FeedbackDetail({
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // The parent passes these as inline arrows, so their identity changes on every one of its
+  // renders — including the ones the list itself triggers. Reading them through a ref keeps
+  // the fetch below keyed on `id` alone; listing them as deps would refetch (and blank the
+  // dialog) each time the list behind it re-rendered.
+  const handlers = useRef({ toast, onClose, onUnauthorized });
+  handlers.current = { toast, onClose, onUnauthorized };
+
   useEffect(() => {
     if (!id) {
       setDetail(null);
@@ -64,14 +71,15 @@ export default function FeedbackDetail({
       })
       .catch((err) => {
         if (cancelled) return;
-        if (err instanceof UnauthorizedError) return onUnauthorized();
-        toast(err instanceof Error ? err.message : 'Failed to load feedback', 'error');
-        onClose();
+        const { toast: t, onClose: close, onUnauthorized: expired } = handlers.current;
+        if (err instanceof UnauthorizedError) return expired();
+        t(err instanceof Error ? err.message : 'Failed to load feedback', 'error');
+        close();
       });
     return () => {
       cancelled = true;
     };
-  }, [id, toast, onClose, onUnauthorized]);
+  }, [id]);
 
   async function save() {
     if (!id) return;

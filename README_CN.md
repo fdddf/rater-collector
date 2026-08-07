@@ -146,11 +146,21 @@ npm run e2e
 
 ## 管理后台
 
-`GET /admin` 是一个单文件 HTML 控制台（零构建步骤，Worker 部署即完成）：反馈列表与筛选、详情与截图预览、状态与备注、转化漏斗统计、**在线改文案**、应用注册与停用。
+`GET /admin` 是一个 React + TypeScript + Tailwind 写的控制台：反馈列表与筛选、详情与截图预览、状态与备注、转化漏斗统计、**在线改文案**、应用注册与停用。明暗主题跟随系统，也可以手动切换。
 
 用 `ADMIN_TOKEN` 登录换一个 7 天的 HttpOnly cookie。生产环境建议在 `/admin*` 前再叠一层 [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)。
 
 对应的 REST 接口在 `/admin/api/*`，用 `Authorization: Bearer <ADMIN_TOKEN>` 调用，可以接自己的工具。
+
+### 改后台界面
+
+源码在 [`admin-ui/`](admin-ui)。Vite 会把它打成一个自包含的 HTML 文件，再由 `scripts/build-admin.mjs` 内联进 `src/admin/dashboard.ts` —— 所以仍然是「部署 Worker 即部署后台」，不需要第二条流水线，也不需要静态资源绑定。生成的那个文件是提交进仓库的，因此纯 `wrangler deploy` 不需要前端工具链。
+
+```bash
+npm run admin:install            # 装一次依赖
+npm run admin:dev                # Vite 起在 :5173，/admin/api 代理到 :8787 的 wrangler dev
+npm run admin:build              # 重新构建并内联 —— 改完界面提交前跑一次
+```
 
 ## 通知
 

@@ -23,6 +23,9 @@ app.get('/health', (c) => c.json({ ok: true }));
 app.route('/v1', configRoutes);
 app.route('/v1', feedbackRoutes);
 app.route('/v1', telemetryRoutes);
+
+// A bookmarked or hand-typed "/admin/" would otherwise fall through to the JSON 404.
+app.get('/admin/', (c) => c.redirect('/admin', 301));
 app.route('/admin', adminRoutes);
 
 app.notFound((c) => c.json({ error: { code: 'not_found', message: 'No such endpoint.' } }, 404));

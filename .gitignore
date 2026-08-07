@@ -17,3 +17,6 @@ worker-configuration.d.ts
 coverage/
 .env
 .env.*
+
+# TypeScript incremental build state
+*.tsbuildinfo

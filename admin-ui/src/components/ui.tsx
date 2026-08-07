@@ -4,7 +4,6 @@ import {
   useContext,
   useEffect,
   useId,
-  useMemo,
   useRef,
   useState,
   type ComponentPropsWithoutRef,
@@ -243,9 +242,12 @@ export function Modal({
       ref={ref}
       onClose={onClose}
       onCancel={onClose}
-      // A <dialog> fills its own box, so the backdrop click has to be detected by
-      // hit-testing the click against the dialog's rectangle.
+      // A <dialog> fills its own box, so a backdrop click has to be detected by hit-testing
+      // against the dialog's rectangle. Requiring the target to *be* the dialog matters too:
+      // a native <select> popup paints outside that rect, so choosing an option would
+      // otherwise register as a backdrop click and close the whole modal.
       onClick={(e) => {
+        if (e.target !== e.currentTarget) return;
         const r = e.currentTarget.getBoundingClientRect();
         const outside =
           e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
@@ -294,11 +296,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setTimeout(() => setToasts((list) => list.filter((t) => t.id !== id)), 3200);
   }, []);
 
-  // `push` is stable, so this only ever produces one context value.
-  const value = useMemo(() => push, [push]);
-
+  // `push` is already stable, so it doubles as the context value.
   return (
-    <ToastContext.Provider value={value}>
+    <ToastContext.Provider value={push}>
       {children}
       {createPortal(
         <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex flex-col items-center gap-2">
