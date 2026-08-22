@@ -41,7 +41,13 @@ npx wrangler d1 migrations apply rater --remote
 npx wrangler secret put ADMIN_TOKEN && npx wrangler secret put UPLOAD_HMAC_SECRET
 ```
 
-把 `wrangler.jsonc` 里的 `PUBLIC_BASE_URL` 改成部署后的地址，然后：
+把 `PUBLIC_BASE_URL` 设成部署后的地址 —— 通知里那条「查看详情」链接就是拿它拼的，所以得填对外地址，末尾不要斜杠：
+
+```bash
+npx wrangler secret put PUBLIC_BASE_URL   # https://rater-collector.<你>.workers.dev
+```
+
+然后：
 ```bash
 npx wrangler deploy
 ```

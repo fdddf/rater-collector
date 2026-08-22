@@ -14,5 +14,7 @@ declare namespace Cloudflare {
     ADMIN_TOKEN: string;
     /** Key used to sign attachment upload tokens. */
     UPLOAD_HMAC_SECRET: string;
+    /** Prefix for the "view detail" links in notifications, with no trailing slash. */
+    PUBLIC_BASE_URL: string;
   }
 }

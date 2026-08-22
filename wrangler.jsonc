@@ -36,14 +36,16 @@
     { "name": "READ_LIMIT", "namespace_id": "1002", "simple": { "limit": 60, "period": 60 } }
   ],
 
-  "vars": {
-    // Prefix for the "view detail" links in notifications. After deploying, change this
-    // to your workers.dev address or custom domain.
-    "PUBLIC_BASE_URL": "http://localhost:8787"
-  }
+  // There is no `vars` block on purpose. PUBLIC_BASE_URL is the one value that would
+  // belong in it, but `vars` is committed and this repo is public — see below.
 
   // Secrets (set with `npx wrangler secret put <NAME>`; locally, put them in .dev.vars):
   //   ADMIN_TOKEN         — password for the admin console
+  //   PUBLIC_BASE_URL     — prefix for the "view detail" links in notifications, e.g.
+  //                         https://rater-collector.<you>.workers.dev or a custom domain.
+  //                         Not sensitive in itself — it's a secret only so the address
+  //                         stays out of this public repo. Unlike a plaintext `vars`
+  //                         entry, a secret also survives `wrangler deploy` untouched.
   //   UPLOAD_HMAC_SECRET  — key used to sign attachment upload tokens
   //   NOTIFY_WEBHOOK_URL  — optional; new-feedback push target (Slack / Discord / Bark / generic JSON)
   //   BARK_SERVER_URL     — optional; Bark server, e.g. https://api.day.app or your own.

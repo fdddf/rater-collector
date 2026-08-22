@@ -1,6 +1,9 @@
 # Copy to .dev.vars for use with `wrangler dev` (that file is gitignored).
 ADMIN_TOKEN="dev-admin-token"
 UPLOAD_HMAC_SECRET="dev-upload-secret-change-me"
+# Prefix for the "view detail" links in notifications. In production this is your
+# workers.dev address or custom domain — no trailing slash.
+PUBLIC_BASE_URL="http://localhost:8787"
 # NOTIFY_WEBHOOK_URL="https://hooks.slack.com/services/xxx"
 
 # Bark push on every new feedback. Both are needed; a self-hosted server works, since

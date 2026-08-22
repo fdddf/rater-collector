@@ -41,7 +41,13 @@ Set the secrets (`NOTIFY_WEBHOOK_URL` is optional):
 npx wrangler secret put ADMIN_TOKEN && npx wrangler secret put UPLOAD_HMAC_SECRET
 ```
 
-Point `PUBLIC_BASE_URL` in `wrangler.jsonc` at your deployed address, then:
+Set `PUBLIC_BASE_URL` to your deployed address — it prefixes the "view detail" links in notifications, so it has to be the public one, with no trailing slash:
+
+```bash
+npx wrangler secret put PUBLIC_BASE_URL   # https://rater-collector.<you>.workers.dev
+```
+
+Then:
 ```bash
 npx wrangler deploy
 ```
