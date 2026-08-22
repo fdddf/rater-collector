@@ -36,7 +36,7 @@ npx wrangler r2 bucket create rater-attachments
 npx wrangler d1 migrations apply rater --remote
 ```
 
-配置 secrets（`NOTIFY_WEBHOOK_URL` 可选）：
+配置 secrets（`NOTIFY_WEBHOOK_URL`、`BARK_*` 可选）：
 ```bash
 npx wrangler secret put ADMIN_TOKEN && npx wrangler secret put UPLOAD_HMAC_SECRET
 ```
@@ -202,7 +202,20 @@ npm run admin:build              # 重新构建并内联 —— 改完界面提�
 
 ## 通知
 
-设置了 `NOTIFY_WEBHOOK_URL` 后，每条新反馈会推一次。按域名自动挑报文格式：
+每条新反馈会往所有已配置的通道各推一次。两个通道互相独立，都配就都推。
+
+### Bark
+
+```bash
+npx wrangler secret put BARK_SERVER_URL    # https://api.day.app，或你自建的服务器
+npx wrangler secret put BARK_DEVICE_KEY
+```
+
+往 `<BARK_SERVER_URL>/<BARK_DEVICE_KEY>` POST `{ title, body, url, group, isArchive }`。Bark 单独占两个变量、不走 `NOTIFY_WEBHOOK_URL`，是因为自建服务器的域名认不出来：`m.example.com` 和任何别的 endpoint 长得一样，靠下面那套域名嗅探只会推成通用 JSON，Bark 那边就什么都不显示。
+
+### Webhook
+
+设置了 `NOTIFY_WEBHOOK_URL` 后，按域名自动挑报文格式：
 
 | 域名 | 格式 |
 |---|---|
@@ -210,6 +223,8 @@ npm run admin:build              # 重新构建并内联 —— 改完界面提�
 | `*.discord.com` | `{ content }` |
 | 含 `bark` / `day.app` | `{ title, body, url, group }` |
 | 其它 | 通用 JSON（含全部字段 + `detailURL` + `summary`） |
+
+推送失败只记日志，不会影响客户端提交。
 
 ## 防刷
 

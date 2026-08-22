@@ -19,6 +19,26 @@ export function notifyWebhookURL(env: Env): string | undefined {
   return (env as Env & { NOTIFY_WEBHOOK_URL?: string }).NOTIFY_WEBHOOK_URL || undefined;
 }
 
+/**
+ * Reads the Bark push target, if one is configured.
+ *
+ * Bark gets its own pair of variables rather than riding on `NOTIFY_WEBHOOK_URL`,
+ * because a self-hosted Bark server has no recognisable host — `m.example.com` looks
+ * like any other endpoint, so host sniffing would send it the generic JSON shape and
+ * the push would silently render as nothing. The two are independent: set both and
+ * each new feedback goes to both.
+ *
+ * Optional, so read off a widened Env — same reason as `notifyWebhookURL`.
+ */
+export function barkPushURL(env: Env): string | undefined {
+  const { BARK_SERVER_URL, BARK_DEVICE_KEY } = env as Env & {
+    BARK_SERVER_URL?: string;
+    BARK_DEVICE_KEY?: string;
+  };
+  if (!BARK_SERVER_URL || !BARK_DEVICE_KEY) return undefined;
+  return `${BARK_SERVER_URL.replace(/\/+$/, '')}/${BARK_DEVICE_KEY}`;
+}
+
 /** The app record attached to the context after X-Rater-Key authentication. */
 export interface AppRecord {
   id: string;

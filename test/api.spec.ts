@@ -883,8 +883,8 @@ describe('translating copy', () => {
 describe('replying by email', () => {
   const RESEND_ENV = {
     RESEND_API_KEY: 're_test_key',
-    RESEND_FROM: 'Support <support@license.mzjpg.com>',
-    RESEND_REPLY_TO: 'support@mzjpg.com',
+    RESEND_FROM: 'Support <support@mail.example.com>',
+    RESEND_REPLY_TO: 'support@support.example.com',
   };
   const reply = { subject: 'Re: your feedback', body: 'Thanks — fixed in 1.0.1.' };
 
@@ -1037,6 +1037,69 @@ describe('rate limiting', () => {
     // A different IP should start with a fresh quota.
     const other = await flood('198.51.100.21');
     expect(other[0]).toBe(201);
+  });
+});
+
+describe('new-feedback notifications', () => {
+  const BARK_ENV = { BARK_SERVER_URL: 'https://bark.example.com/', BARK_DEVICE_KEY: 'devicekey123' };
+
+  /** Records every outbound push instead of letting it leave the test. */
+  function stubPushes() {
+    const calls: { url: string; body: any }[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init.body ?? '{}')) });
+      return Response.json({ code: 200 });
+    });
+    return calls;
+  }
+
+  /** `complete` is what fires the push, so that call is the one that needs the env. */
+  async function submitWith(envOverride: Record<string, string>): Promise<void> {
+    const created = await request('/v1/feedback', {
+      method: 'POST',
+      headers: clientHeaders,
+      body: JSON.stringify(validBody()),
+    });
+    const { id } = await created.json<{ id: string }>();
+    await request(`/v1/feedback/${id}/complete`, { method: 'POST', headers: clientHeaders }, envOverride);
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('pushes to a self-hosted Bark server in the shape Bark renders', async () => {
+    const calls = stubPushes();
+    await submitWith(BARK_ENV);
+
+    expect(calls).toHaveLength(1);
+    // No double slash even though BARK_SERVER_URL has a trailing one.
+    expect(calls[0]!.url).toBe('https://bark.example.com/devicekey123');
+    expect(calls[0]!.body).toMatchObject({ title: `New feedback — Test ${TEST_APP_ID}`, group: 'Feedback' });
+    expect(calls[0]!.body.body).toContain('The app crashes when I export photos');
+  });
+
+  it('pushes nothing when neither target is configured', async () => {
+    const calls = stubPushes();
+    await submitWith({});
+    expect(calls).toHaveLength(0);
+  });
+
+  it('pushes to Bark and the webhook independently', async () => {
+    const calls = stubPushes();
+    await submitWith({ ...BARK_ENV, NOTIFY_WEBHOOK_URL: 'https://hooks.slack.com/services/xxx' });
+
+    expect(calls.map((c) => c.url).sort()).toEqual([
+      'https://bark.example.com/devicekey123',
+      'https://hooks.slack.com/services/xxx',
+    ]);
+    expect(calls.find((c) => c.url.includes('slack'))!.body.text).toContain('📮 New feedback');
+  });
+
+  it('survives a Bark server that is down', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new Error('connection refused');
+    });
+    // The client's `complete` must still succeed — the push runs in waitUntil.
+    await expect(submitWith(BARK_ENV)).resolves.toBeUndefined();
   });
 });
 

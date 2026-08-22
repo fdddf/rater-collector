@@ -206,7 +206,20 @@ npm run admin:build              # rebuild and re-inline — run this before com
 
 ## Notifications
 
-With `NOTIFY_WEBHOOK_URL` set, every new feedback triggers one push. The payload shape is picked from the host:
+Every new feedback pushes once to each configured target. The two are independent — set both and both fire.
+
+### Bark
+
+```bash
+npx wrangler secret put BARK_SERVER_URL    # https://api.day.app, or your own server
+npx wrangler secret put BARK_DEVICE_KEY
+```
+
+Posts `{ title, body, url, group, isArchive }` to `<BARK_SERVER_URL>/<BARK_DEVICE_KEY>`. Bark gets its own pair of variables rather than riding on `NOTIFY_WEBHOOK_URL` because a self-hosted server has no recognisable host: `m.example.com` looks like any other endpoint, so the host sniffing below would send it generic JSON and the push would render as nothing.
+
+### Webhook
+
+With `NOTIFY_WEBHOOK_URL` set, the payload shape is picked from the host:
 
 | Host | Shape |
 |---|---|
@@ -214,6 +227,8 @@ With `NOTIFY_WEBHOOK_URL` set, every new feedback triggers one push. The payload
 | `*.discord.com` | `{ content }` |
 | contains `bark` / `day.app` | `{ title, body, url, group }` |
 | anything else | generic JSON (all fields plus `detailURL` and `summary`) |
+
+A push that fails is logged and dropped — it never fails the client's submit.
 
 ## Abuse protection
 

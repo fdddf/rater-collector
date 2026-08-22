@@ -3,6 +3,11 @@ ADMIN_TOKEN="dev-admin-token"
 UPLOAD_HMAC_SECRET="dev-upload-secret-change-me"
 # NOTIFY_WEBHOOK_URL="https://hooks.slack.com/services/xxx"
 
+# Bark push on every new feedback. Both are needed; a self-hosted server works, since
+# this target is explicit rather than sniffed from NOTIFY_WEBHOOK_URL's host.
+# BARK_SERVER_URL="https://api.day.app"
+# BARK_DEVICE_KEY="your-device-key"
+
 # Batch translation of prompt copy. Without TRANSLATE_API_KEY the console hides the
 # Translate button; everything else works.
 # TRANSLATE_PROVIDER="anthropic"          # anthropic (default) | openai
@@ -13,5 +18,5 @@ UPLOAD_HMAC_SECRET="dev-upload-secret-change-me"
 # Replying to feedback by email, through Resend (https://resend.com). Without
 # RESEND_API_KEY the console falls back to a mailto: link; nothing else changes.
 # RESEND_API_KEY="re_..."
-# RESEND_FROM="Support <support@license.mzjpg.com>"   # domain must be verified in Resend
-# RESEND_REPLY_TO="support@mzjpg.com"                 # where the user's reply lands
+# RESEND_FROM="Support <support@mail.example.com>"  # domain must be verified in Resend
+# RESEND_REPLY_TO="support@support.example.com"     # where the user's reply lands
