@@ -2,7 +2,7 @@ import { env } from 'cloudflare:test';
 import { sha256Hex } from '../src/lib/crypto';
 
 export async function resetDatabase(): Promise<void> {
-  const tables = ['attachments', 'telemetry', 'feedback', 'prompt_configs', 'apps'];
+  const tables = ['attachments', 'feedback_replies', 'telemetry', 'feedback', 'prompt_configs', 'apps'];
   for (const table of tables) {
     await env.DB.prepare(`DELETE FROM ${table}`).run();
   }

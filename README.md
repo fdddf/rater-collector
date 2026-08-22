@@ -150,7 +150,7 @@ Batched `shown` / `positive` / `negative` / `dismissed` / `submitted` events, us
 
 ## Admin console
 
-`GET /admin` serves a React + TypeScript + Tailwind console. It covers feedback browsing and filtering, detail with screenshot previews, status and internal notes, single and bulk deletion (screenshots included, straight out of R2), conversion funnel stats with a per-app reset, **live copy editing** and batch translation, and app registration and deactivation. Light and dark themes follow the OS and can be overridden.
+`GET /admin` serves a React + TypeScript + Tailwind console. It covers feedback browsing and filtering, detail with screenshot previews, status and internal notes, replying to the user by email, single and bulk deletion (screenshots included, straight out of R2), conversion funnel stats with a per-app reset, **live copy editing** and batch translation, and app registration and deactivation. Light and dark themes follow the OS and can be overridden.
 
 Signing in with `ADMIN_TOKEN` yields a 7-day HttpOnly cookie. In production, consider putting [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) in front of `/admin*` as a second layer.
 
@@ -179,6 +179,20 @@ npx wrangler secret put TRANSLATE_BASE_URL    # e.g. https://api.deepseek.com/v1
 ```
 
 Leave `TRANSLATE_API_KEY` unset and the Translate button simply doesn't appear; everything else in the console works as before.
+
+### Replying by email
+
+With [Resend](https://resend.com) configured, the feedback detail view gains a composer: subject, message, **Send reply**. The address comes from the feedback itself — never from the request — and every send is stored, so the dialog shows the thread of what the user has already been told.
+
+```bash
+npx wrangler secret put RESEND_API_KEY        # re_...
+npx wrangler secret put RESEND_FROM           # "Support <support@your-domain.com>" — domain verified in Resend
+npx wrangler secret put RESEND_REPLY_TO       # optional; where the user's reply lands
+```
+
+Two things worth knowing. The `RESEND_FROM` domain has to be verified in Resend (SPF/DKIM), or the send comes back as a 502 quoting the provider's complaint. And Resend only sends: the user's reply goes to `RESEND_REPLY_TO`, not back into the console — point it at a mailbox you actually read, e.g. an address that [Email Routing](https://developers.cloudflare.com/email-routing/) forwards to you.
+
+Leave `RESEND_API_KEY` unset and the detail view keeps its old `mailto:` button; nothing else changes.
 
 ### Working on the console
 

@@ -21,4 +21,6 @@ export const Errors = {
   unsupportedMedia: (msg: string) => apiError(415, 'unsupported_media_type', msg),
   rateLimited: (msg = 'Too many requests. Please try again later.') =>
     apiError(429, 'rate_limited', msg),
+  /** An upstream this Worker calls on the caller's behalf failed — the caller's request was fine. */
+  badGateway: (msg: string) => apiError(502, 'bad_gateway', msg),
 };

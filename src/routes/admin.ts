@@ -5,9 +5,11 @@ import { Errors } from '../lib/errors';
 import {
   feedbackBulkDeleteSchema,
   feedbackPatchSchema,
+  feedbackReplySchema,
   promptConfigUpsertSchema,
   promptTranslateSchema,
 } from '../lib/schemas';
+import { emailConfig, emailConfigured, sendReplyEmail } from '../lib/email';
 import {
   translateConfig,
   translateConfigured,
@@ -61,8 +63,13 @@ adminRoutes.post('/api/logout', (c) =>
 const api = new Hono<HonoEnv>();
 api.use('*', requireAdmin);
 
-/** Server capabilities the console has to know about before it can render — currently just whether the translator has an API key. */
-api.get('/settings', (c) => c.json({ translate_enabled: translateConfigured(c.env) }));
+/** Server capabilities the console has to know about before it can render — which of the optional integrations have keys. */
+api.get('/settings', (c) =>
+  c.json({
+    translate_enabled: translateConfigured(c.env),
+    reply_enabled: emailConfigured(c.env),
+  }),
+);
 
 // ── Apps ─────────────────────────────────────────────────────────────────────
 
@@ -347,9 +354,16 @@ api.get('/feedback/:id', async (c) => {
     .bind(id)
     .all();
 
+  const { results: replies } = await c.env.DB.prepare(
+    'SELECT id, to_email, subject, body, sent_at FROM feedback_replies WHERE feedback_id = ? ORDER BY sent_at',
+  )
+    .bind(id)
+    .all();
+
   return c.json({
     feedback: { ...row, metadata: safeParse(row.metadata_json as string | null, null) },
     attachments: results ?? [],
+    replies: replies ?? [],
   });
 });
 
@@ -370,6 +384,44 @@ api.patch('/feedback/:id', async (c) => {
     .run();
   if (res.meta.changes === 0) throw Errors.notFound('No such feedback.');
   return c.json({ ok: true });
+});
+
+/**
+ * Emails the user who left this feedback, through Resend.
+ *
+ * The recipient comes from the stored `feedback.email`, never from the request body: the
+ * console is a reply box, not a mailer someone can point anywhere. Only successful sends
+ * are recorded, so `feedback_replies` is the log of what actually went out.
+ */
+api.post('/feedback/:id/reply', async (c) => {
+  // Before the body is parsed, so a missing secret is one error naming the variable
+  // rather than a validation complaint about copy that was fine.
+  const config = emailConfig(c.env);
+
+  const parsed = feedbackReplySchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    throw Errors.badRequest(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
+  }
+
+  const id = c.req.param('id');
+  const row = await c.env.DB.prepare('SELECT id, email FROM feedback WHERE id = ?')
+    .bind(id)
+    .first<{ id: string; email: string | null }>();
+  if (!row) throw Errors.notFound('No such feedback.');
+  if (!row.email) throw Errors.badRequest('This feedback was submitted without an email address.');
+
+  const { subject, body } = parsed.data;
+  const providerID = await sendReplyEmail(config, { to: row.email, subject, body });
+
+  const reply = { id: newID('rep'), to_email: row.email, subject, body, sent_at: Date.now() };
+  await c.env.DB.prepare(
+    `INSERT INTO feedback_replies (id, feedback_id, to_email, subject, body, provider, provider_id, sent_at)
+     VALUES (?,?,?,?,?, 'resend', ?, ?)`,
+  )
+    .bind(reply.id, id, reply.to_email, reply.subject, reply.body, providerID, reply.sent_at)
+    .run();
+
+  return c.json({ reply }, 201);
 });
 
 api.delete('/feedback/:id', async (c) => {
@@ -406,9 +458,13 @@ async function deleteFeedback(env: HonoEnv['Bindings'], ids: string[]): Promise<
   const keys = (results ?? []).map((r) => r.r2_key);
   if (keys.length > 0) await env.ATTACHMENTS.delete(keys);
 
-  // ON DELETE CASCADE would cover the attachment rows, but foreign-key enforcement is a
+  // ON DELETE CASCADE would cover the child rows, but foreign-key enforcement is a
   // database setting rather than something this code controls — so say it explicitly.
   await env.DB.prepare(`DELETE FROM attachments WHERE feedback_id IN (${placeholders})`)
+    .bind(...ids)
+    .run();
+
+  await env.DB.prepare(`DELETE FROM feedback_replies WHERE feedback_id IN (${placeholders})`)
     .bind(...ids)
     .run();
 

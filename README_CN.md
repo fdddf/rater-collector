@@ -146,7 +146,7 @@ npm run e2e
 
 ## 管理后台
 
-`GET /admin` 是一个 React + TypeScript + Tailwind 写的控制台：反馈列表与筛选、详情与截图预览、状态与备注、单条或批量删除（连同 R2 里的截图一起清掉）、转化漏斗统计与按应用重置、**在线改文案**及多语言翻译、应用注册与停用。明暗主题跟随系统，也可以手动切换。
+`GET /admin` 是一个 React + TypeScript + Tailwind 写的控制台：反馈列表与筛选、详情与截图预览、状态与备注、邮件回复用户、单条或批量删除（连同 R2 里的截图一起清掉）、转化漏斗统计与按应用重置、**在线改文案**及多语言翻译、应用注册与停用。明暗主题跟随系统，也可以手动切换。
 
 用 `ADMIN_TOKEN` 登录换一个 7 天的 HttpOnly cookie。生产环境建议在 `/admin*` 前再叠一层 [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)。
 
@@ -175,6 +175,20 @@ npx wrangler secret put TRANSLATE_BASE_URL    # 例如 https://api.deepseek.com/
 ```
 
 不设 `TRANSLATE_API_KEY` 的话翻译按钮不会出现，后台其余功能照常。
+
+### 邮件回复
+
+配好 [Resend](https://resend.com) 之后，反馈详情里会多出一个撰写框：主题、正文、**发送回复**。收件地址取自这条反馈本身，不接受请求里传入，发出去的每一封都会存下来，所以弹窗里能看到之前跟这个用户说过什么。
+
+```bash
+npx wrangler secret put RESEND_API_KEY        # re_...
+npx wrangler secret put RESEND_FROM           # "Support <support@your-domain.com>" —— 域名需在 Resend 验证过
+npx wrangler secret put RESEND_REPLY_TO       # 可选；用户回信落到哪个邮箱
+```
+
+有两点要注意。`RESEND_FROM` 的域名必须在 Resend 里验证过（SPF/DKIM），否则发信会返回 502 并带上服务商的原话。另外 Resend 只负责发信：用户点回复是寄到 `RESEND_REPLY_TO`，不会回到后台里 —— 所以填一个你真的会看的邮箱，比如用 [Email Routing](https://developers.cloudflare.com/email-routing/) 转发到自己私人邮箱的地址。
+
+不设 `RESEND_API_KEY` 的话，详情页仍是原来那个 `mailto:` 按钮，其余功能不受影响。
 
 ### 改后台界面
 

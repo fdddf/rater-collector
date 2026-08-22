@@ -1,5 +1,5 @@
 import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import worker from '../src/index';
 import {
   ADMIN_TOKEN,
@@ -21,14 +21,20 @@ const BASE = 'http://localhost';
  * without this the whole suite would share one "IP" and every submission past the fifth
  * would 429. Tests that exercise rate limiting pass a fixed CF-Connecting-IP themselves.
  */
-async function request(path: string, init?: RequestInit): Promise<Response> {
+async function request(
+  path: string,
+  init?: RequestInit,
+  /** Extra bindings for this call only — how the optional secrets get exercised. */
+  envOverride?: Record<string, string>,
+): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (!headers.has('CF-Connecting-IP')) {
     headers.set('CF-Connecting-IP', `203.0.113.${Math.floor(Math.random() * 254) + 1}-${crypto.randomUUID()}`);
   }
 
   const ctx = createExecutionContext();
-  const response = await worker.fetch(new Request(BASE + path, { ...init, headers }), env, ctx);
+  const bindings = envOverride ? { ...env, ...envOverride } : env;
+  const response = await worker.fetch(new Request(BASE + path, { ...init, headers }), bindings, ctx);
   await waitOnExecutionContext(ctx);
   return response;
 }
@@ -871,6 +877,127 @@ describe('translating copy', () => {
     const res = await request('/admin/api/settings', { headers: adminHeaders });
     expect(res.status).toBe(200);
     expect((await res.json<any>()).translate_enabled).toBe(false);
+  });
+});
+
+describe('replying by email', () => {
+  const RESEND_ENV = {
+    RESEND_API_KEY: 're_test_key',
+    RESEND_FROM: 'Support <support@license.mzjpg.com>',
+    RESEND_REPLY_TO: 'support@mzjpg.com',
+  };
+  const reply = { subject: 'Re: your feedback', body: 'Thanks — fixed in 1.0.1.' };
+
+  /** Replaces global fetch so nothing leaves the test, and records what Resend was sent. */
+  function stubResend(response: Response) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      calls.push({ url: String(input), init });
+      return response.clone();
+    });
+    return calls;
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('names the missing secret instead of failing at the provider', async () => {
+    const id = await submitFeedback();
+    const res = await request(`/admin/api/feedback/${id}/reply`, {
+      method: 'POST', headers: adminHeaders, body: JSON.stringify(reply),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json<any>()).error.message).toContain('RESEND_API_KEY');
+  });
+
+  it('sends through Resend and records what went out', async () => {
+    const id = await submitFeedback();
+    const calls = stubResend(Response.json({ id: 'resend-msg-1' }));
+
+    const res = await request(
+      `/admin/api/feedback/${id}/reply`,
+      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
+      RESEND_ENV,
+    );
+    expect(res.status).toBe(201);
+
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.url).toBe('https://api.resend.com/emails');
+    const sent = JSON.parse(call.init.body as string);
+    expect(sent).toMatchObject({
+      from: RESEND_ENV.RESEND_FROM,
+      to: ['tester@example.com'],
+      subject: reply.subject,
+      text: reply.body,
+      reply_to: RESEND_ENV.RESEND_REPLY_TO,
+    });
+
+    const detail = await (await request(`/admin/api/feedback/${id}`, { headers: adminHeaders })).json<any>();
+    expect(detail.replies).toHaveLength(1);
+    expect(detail.replies[0]).toMatchObject({ to_email: 'tester@example.com', subject: reply.subject });
+    expect(
+      await env.DB.prepare('SELECT provider_id FROM feedback_replies WHERE feedback_id = ?')
+        .bind(id)
+        .first<{ provider_id: string }>(),
+    ).toMatchObject({ provider_id: 'resend-msg-1' });
+  });
+
+  it('records nothing when Resend rejects the message', async () => {
+    const id = await submitFeedback();
+    stubResend(Response.json({ message: 'The domain is not verified.' }, { status: 403 }));
+
+    const res = await request(
+      `/admin/api/feedback/${id}/reply`,
+      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
+      RESEND_ENV,
+    );
+    expect(res.status).toBe(502);
+    expect((await res.json<any>()).error.message).toContain('not verified');
+    expect(
+      await env.DB.prepare('SELECT id FROM feedback_replies WHERE feedback_id = ?').bind(id).first(),
+    ).toBeNull();
+  });
+
+  it('refuses a feedback that left no email address', async () => {
+    const id = await submitFeedback({ email: '' });
+    const calls = stubResend(Response.json({ id: 'never' }));
+
+    const res = await request(
+      `/admin/api/feedback/${id}/reply`,
+      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
+      RESEND_ENV,
+    );
+    expect(res.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('returns 404 for an unknown feedback', async () => {
+    const res = await request(
+      '/admin/api/feedback/fb_nope/reply',
+      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
+      RESEND_ENV,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('takes the replies with the feedback when it is deleted', async () => {
+    const id = await submitFeedback();
+    stubResend(Response.json({ id: 'resend-msg-2' }));
+    await request(
+      `/admin/api/feedback/${id}/reply`,
+      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
+      RESEND_ENV,
+    );
+
+    await request(`/admin/api/feedback/${id}`, { method: 'DELETE', headers: adminHeaders });
+    expect(
+      await env.DB.prepare('SELECT id FROM feedback_replies WHERE feedback_id = ?').bind(id).first(),
+    ).toBeNull();
+  });
+
+  it('reports whether replying is configured', async () => {
+    const res = await request('/admin/api/settings', { headers: adminHeaders });
+    expect((await res.json<any>()).reply_enabled).toBe(false);
   });
 });
 

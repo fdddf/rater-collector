@@ -1,9 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
-import { Mail, Trash2 } from 'lucide-react';
+import { Mail, Send, Trash2 } from 'lucide-react';
 import { api, attachmentURL, UnauthorizedError } from '../lib/api';
 import { fmtBytes, fmtTime } from '../lib/format';
-import type { Attachment, FeedbackDetail as Detail, FeedbackStatus } from '../lib/types';
-import { Badge, Button, Field, Modal, Select, Spinner, Textarea, statusTone, useToast } from '../components/ui';
+import type {
+  Attachment,
+  FeedbackDetail as Detail,
+  FeedbackReply,
+  FeedbackStatus,
+} from '../lib/types';
+import {
+  Badge,
+  Button,
+  Field,
+  Input,
+  Modal,
+  Select,
+  Spinner,
+  Textarea,
+  statusTone,
+  useToast,
+} from '../components/ui';
+
+/** What the composer starts with — the same wording the mailto: fallback uses. */
+const replySubject = (f: Detail) => `Re: your feedback · ${f.app_name}`;
 
 const STATUSES: FeedbackStatus[] = ['open', 'resolved', 'spam', 'pending'];
 
@@ -43,10 +62,23 @@ export default function FeedbackDetail({
   const toast = useToast();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [replies, setReplies] = useState<FeedbackReply[]>([]);
   const [status, setStatus] = useState<string>('open');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [subject, setSubject] = useState('');
+  const [replyBody, setReplyBody] = useState('');
+  const [sending, setSending] = useState(false);
+  // Whether the server has Resend credentials. Failing quietly leaves the mailto: fallback.
+  const [canReply, setCanReply] = useState(false);
+
+  useEffect(() => {
+    api
+      .settings()
+      .then((s) => setCanReply(s.reply_enabled))
+      .catch(() => setCanReply(false));
+  }, []);
 
   // The parent passes these as inline arrows, so their identity changes on every one of its
   // renders — including the ones the list itself triggers. Reading them through a ref keeps
@@ -68,8 +100,11 @@ export default function FeedbackDetail({
         if (cancelled) return;
         setDetail(data.feedback);
         setAttachments(data.attachments);
+        setReplies(data.replies);
         setStatus(data.feedback.status);
         setNote(data.feedback.admin_note ?? '');
+        setSubject(replySubject(data.feedback));
+        setReplyBody('');
       })
       .catch((err) => {
         if (cancelled) return;
@@ -95,6 +130,22 @@ export default function FeedbackDetail({
       toast(err instanceof Error ? err.message : 'Save failed', 'error');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function sendReply() {
+    if (!id) return;
+    setSending(true);
+    try {
+      const { reply } = await api.replyToFeedback(id, { subject, body: replyBody });
+      setReplies((prev) => [...prev, reply]);
+      setReplyBody('');
+      toast('Reply sent');
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return onUnauthorized();
+      toast(err instanceof Error ? err.message : 'Send failed', 'error');
+    } finally {
+      setSending(false);
     }
   }
 
@@ -146,9 +197,9 @@ export default function FeedbackDetail({
             <Button variant="primary" onClick={save} busy={saving}>
               Save
             </Button>
-            {detail.email && (
+            {detail.email && !canReply && (
               <a
-                href={`mailto:${detail.email}?subject=${encodeURIComponent(`Re: your feedback · ${detail.app_name}`)}`}
+                href={`mailto:${detail.email}?subject=${encodeURIComponent(replySubject(detail))}`}
                 className="inline-flex h-9 items-center gap-1.5 rounded-lg px-3.5 text-sm font-medium text-ink-2 ring-1 ring-border ring-inset transition-colors hover:bg-surface-2 hover:text-ink"
               >
                 <Mail className="size-4" />
@@ -214,6 +265,69 @@ export default function FeedbackDetail({
               </div>
             ))}
           </dl>
+
+          {detail.email && (
+            <section className="space-y-3 rounded-xl ring-1 ring-border ring-inset p-4">
+              <header className="flex items-center gap-2 text-xs font-medium text-ink-2">
+                <Mail className="size-4 text-ink-3" />
+                Email reply
+                <span className="text-ink-3">to {detail.email}</span>
+              </header>
+
+              {replies.length > 0 && (
+                <ol className="space-y-2">
+                  {replies.map((r) => (
+                    <li key={r.id} className="rounded-lg bg-surface-2 p-3 text-[13px]">
+                      <div className="flex flex-wrap items-baseline gap-2">
+                        <span className="font-medium">{r.subject}</span>
+                        <span className="text-xs text-ink-3">{fmtTime(r.sent_at)}</span>
+                      </div>
+                      <p className="mt-1 whitespace-pre-wrap text-ink-2">{r.body}</p>
+                    </li>
+                  ))}
+                </ol>
+              )}
+
+              {canReply ? (
+                <>
+                  <Field label="Subject">
+                    {(fid) => (
+                      <Input
+                        id={fid}
+                        value={subject}
+                        onChange={(e) => setSubject(e.target.value)}
+                      />
+                    )}
+                  </Field>
+                  <Field label="Message">
+                    {(fid) => (
+                      <Textarea
+                        id={fid}
+                        value={replyBody}
+                        onChange={(e) => setReplyBody(e.target.value)}
+                        rows={6}
+                        placeholder="Sent to the user as plain text. Their reply goes to your support inbox, not back into this console."
+                      />
+                    )}
+                  </Field>
+                  <Button
+                    variant="primary"
+                    busy={sending}
+                    disabled={!subject.trim() || !replyBody.trim()}
+                    onClick={sendReply}
+                  >
+                    <Send className="size-4" />
+                    Send reply
+                  </Button>
+                </>
+              ) : (
+                <p className="text-xs text-ink-3">
+                  Sending from the console needs the RESEND_API_KEY and RESEND_FROM secrets. Until
+                  they're set, use the “Reply by email” button below to open your mail client.
+                </p>
+              )}
+            </section>
+          )}
 
           <Field label="Internal note">
             {(fid) => (

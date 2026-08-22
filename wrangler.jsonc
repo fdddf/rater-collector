@@ -50,4 +50,7 @@
   //   TRANSLATE_PROVIDER  — optional; "anthropic" (default) or "openai"
   //   TRANSLATE_MODEL     — optional for anthropic, required for openai
   //   TRANSLATE_BASE_URL  — optional; base URL of an OpenAI-compatible endpoint
+  //   RESEND_API_KEY      — optional; enables replying to feedback by email
+  //   RESEND_FROM         — required with RESEND_API_KEY; sender on a Resend-verified domain
+  //   RESEND_REPLY_TO     — optional; inbox the user's reply goes to
 }

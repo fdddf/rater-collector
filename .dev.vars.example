@@ -9,3 +9,9 @@ UPLOAD_HMAC_SECRET="dev-upload-secret-change-me"
 # TRANSLATE_API_KEY="sk-ant-..."
 # TRANSLATE_MODEL="claude-opus-5"         # required when provider is openai
 # TRANSLATE_BASE_URL="https://api.deepseek.com/v1"   # any OpenAI-compatible endpoint
+
+# Replying to feedback by email, through Resend (https://resend.com). Without
+# RESEND_API_KEY the console falls back to a mailto: link; nothing else changes.
+# RESEND_API_KEY="re_..."
+# RESEND_FROM="Support <support@license.mzjpg.com>"   # domain must be verified in Resend
+# RESEND_REPLY_TO="support@mzjpg.com"                 # where the user's reply lands

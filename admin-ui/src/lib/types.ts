@@ -47,6 +47,15 @@ export interface FeedbackDetail extends FeedbackRow {
   metadata: Record<string, unknown> | null;
 }
 
+/** One email already sent to the user from the console. */
+export interface FeedbackReply {
+  id: string;
+  to_email: string;
+  subject: string;
+  body: string;
+  sent_at: number;
+}
+
 export interface Attachment {
   idx: number;
   r2_key: string;
@@ -86,6 +95,8 @@ export type PromptDraft = Omit<PromptConfig, 'id' | 'app_id' | 'updated_at'> &
 /** Server capabilities, so the console can hide what isn't wired up. */
 export interface Settings {
   translate_enabled: boolean;
+  /** Whether Resend is configured; without it the detail view falls back to a mailto: link. */
+  reply_enabled: boolean;
 }
 
 /** Machine translations awaiting review — `prompts` are unsaved drafts, one per locale that succeeded. */

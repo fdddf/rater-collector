@@ -106,3 +106,14 @@ export const feedbackPatchSchema = z
   .refine((v) => v.status !== undefined || v.admin_note !== undefined, {
     message: 'at least one field must be provided',
   });
+
+/**
+ * Request body for replying to one feedback by email.
+ *
+ * The recipient isn't in here: it's the address the user left on the feedback itself, so
+ * the console can't be talked into mailing somewhere else.
+ */
+export const feedbackReplySchema = z.object({
+  subject: z.string().trim().min(1).max(200),
+  body: z.string().trim().min(1).max(10000),
+});

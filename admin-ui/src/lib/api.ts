@@ -2,6 +2,7 @@ import type {
   App,
   Attachment,
   FeedbackDetail,
+  FeedbackReply,
   FeedbackRow,
   NewAppResult,
   PromptConfig,
@@ -70,9 +71,11 @@ export const api = {
     return request<{ items: FeedbackRow[]; next_before: number | null }>(`/feedback?${p}`);
   },
   feedbackDetail: (id: string) =>
-    request<{ feedback: FeedbackDetail; attachments: Attachment[] }>(
+    request<{ feedback: FeedbackDetail; attachments: Attachment[]; replies: FeedbackReply[] }>(
       `/feedback/${encodeURIComponent(id)}`,
     ),
+  replyToFeedback: (id: string, body: { subject: string; body: string }) =>
+    send<{ reply: FeedbackReply }>('POST', `/feedback/${encodeURIComponent(id)}/reply`, body),
   patchFeedback: (id: string, body: { status?: string; admin_note?: string }) =>
     send<{ ok: true }>('PATCH', `/feedback/${encodeURIComponent(id)}`, body),
   deleteFeedback: (id: string) =>
