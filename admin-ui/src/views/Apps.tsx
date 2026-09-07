@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Check, Copy, KeyRound, Plus, RotateCcw } from 'lucide-react';
 import { api, UnauthorizedError } from '../lib/api';
 import { fmtTime } from '../lib/format';
-import type { App, NewAppResult } from '../lib/types';
+import type { App } from '../lib/types';
 import {
   Badge,
   Button,
@@ -29,7 +29,8 @@ export default function Apps({
   const [storeID, setStoreID] = useState('');
   const [busy, setBusy] = useState(false);
   const [resetting, setResetting] = useState<string | null>(null);
-  const [created, setCreated] = useState<NewAppResult | null>(null);
+  const [rotating, setRotating] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<RevealedKey | null>(null);
 
   async function create() {
     if (!name.trim()) return toast('Name is required', 'error');
@@ -40,7 +41,7 @@ export default function Apps({
         id: id.trim() || undefined,
         app_store_id: storeID.trim() || undefined,
       });
-      setCreated(result);
+      setRevealed({ name: result.name, apiKey: result.api_key, rotated: false });
       setName('');
       setId('');
       setStoreID('');
@@ -60,6 +61,28 @@ export default function Apps({
     } catch (err) {
       if (err instanceof UnauthorizedError) return onUnauthorized();
       toast(err instanceof Error ? err.message : 'Update failed', 'error');
+    }
+  }
+
+  async function rotateKey(app: App) {
+    if (
+      !confirm(
+        `Issue a new API key for "${app.name}"?\n\n` +
+          'The current key stops working immediately, so any build already shipped with it ' +
+          'will get 401s until you ship one carrying the new key.',
+      )
+    ) {
+      return;
+    }
+    setRotating(app.id);
+    try {
+      const { api_key } = await api.rotateAppKey(app.id);
+      setRevealed({ name: app.name, apiKey: api_key, rotated: true });
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return onUnauthorized();
+      toast(err instanceof Error ? err.message : 'Could not issue a new key', 'error');
+    } finally {
+      setRotating(null);
     }
   }
 
@@ -116,6 +139,16 @@ export default function Apps({
                       <Button
                         size="sm"
                         variant="ghost"
+                        busy={rotating === a.id}
+                        onClick={() => rotateKey(a)}
+                        title="Issue a new API key — the current one stops working immediately"
+                      >
+                        <KeyRound className="size-4" />
+                        New key
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
                         busy={resetting === a.id}
                         onClick={() => resetStats(a)}
                         title="Delete this app's prompt funnel events and start counting from zero"
@@ -138,7 +171,7 @@ export default function Apps({
       <Card className="p-4">
         <SectionHeading
           title="Register a new app"
-          hint="The API key is shown only once, at registration — the database keeps only its hash."
+          hint="The API key is shown only once — the database keeps only its hash. Lost one? Issue a new key from the row above."
         />
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Name">
@@ -170,25 +203,32 @@ export default function Apps({
         </div>
       </Card>
 
-      <ApiKeyModal app={created} onClose={() => setCreated(null)} />
+      <ApiKeyModal reveal={revealed} onClose={() => setRevealed(null)} />
     </div>
   );
 }
 
-/** The one and only chance to copy the plaintext key, so it gets a deliberate dialog. */
-function ApiKeyModal({ app, onClose }: { app: NewAppResult | null; onClose: () => void }) {
+/** A plaintext key the server will never show again, so it gets a deliberate dialog. */
+interface RevealedKey {
+  name: string;
+  apiKey: string;
+  /** True when it replaced an existing key, false when the app was just registered. */
+  rotated: boolean;
+}
+
+function ApiKeyModal({ reveal, onClose }: { reveal: RevealedKey | null; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
-    if (!app) return;
-    await navigator.clipboard.writeText(app.api_key);
+    if (!reveal) return;
+    await navigator.clipboard.writeText(reveal.apiKey);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
   return (
     <Modal
-      open={app !== null}
+      open={reveal !== null}
       onClose={onClose}
       title="Save this API key now"
       footer={
@@ -197,16 +237,17 @@ function ApiKeyModal({ app, onClose }: { app: NewAppResult | null; onClose: () =
         </Button>
       }
     >
-      {app && (
+      {reveal && (
         <div className="space-y-4">
           <p className="text-sm text-ink-2">
-            <strong className="font-medium text-ink">{app.name}</strong> is registered. This key is shown
-            only once — the server stores just its SHA-256, so it cannot be recovered.
+            <strong className="font-medium text-ink">{reveal.name}</strong>{' '}
+            {reveal.rotated ? 'has a new key, and the old one no longer works.' : 'is registered.'} This
+            key is shown only once — the server stores just its SHA-256, so it cannot be recovered.
           </p>
           <div className="flex items-center gap-2 rounded-xl bg-surface-2 p-3">
             <KeyRound className="size-4 shrink-0 text-ink-3" />
             <code className="min-w-0 flex-1 font-mono text-xs break-all text-ink select-all">
-              {app.api_key}
+              {reveal.apiKey}
             </code>
             <Button size="sm" onClick={copy}>
               {copied ? <Check className="size-4 text-good" /> : <Copy className="size-4" />}

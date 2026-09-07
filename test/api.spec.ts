@@ -780,6 +780,42 @@ describe('deleting feedback', () => {
   });
 });
 
+describe('rotating an app key', () => {
+  it('issues a working key and retires the old one', async () => {
+    const res = await request(`/admin/api/apps/${TEST_APP_ID}/rotate-key`, {
+      method: 'POST', headers: adminHeaders,
+    });
+    expect(res.status).toBe(200);
+    const { api_key } = await res.json<any>();
+    expect(api_key).toMatch(/^rtr_pub_[0-9a-f]{40}$/);
+
+    const withNew = await request('/v1/telemetry', {
+      method: 'POST',
+      headers: { 'X-Rater-Key': api_key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: [{ kind: 'shown' }] }),
+    });
+    expect(withNew.status).toBe(200);
+
+    const withOld = await request('/v1/telemetry', {
+      method: 'POST', headers: clientHeaders,
+      body: JSON.stringify({ events: [{ kind: 'shown' }] }),
+    });
+    expect(withOld.status).toBe(401);
+  });
+
+  it('returns 404 for an unknown app', async () => {
+    const res = await request('/admin/api/apps/nope/rotate-key', {
+      method: 'POST', headers: adminHeaders,
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it('requires the admin token', async () => {
+    const res = await request(`/admin/api/apps/${TEST_APP_ID}/rotate-key`, { method: 'POST' });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('resetting app stats', () => {
   it('clears telemetry and leaves feedback standing', async () => {
     await request('/v1/telemetry', {

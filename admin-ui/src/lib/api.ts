@@ -56,6 +56,8 @@ export const api = {
     send<{ ok: true }>('PATCH', `/apps/${encodeURIComponent(id)}`, body),
   resetStats: (id: string) =>
     send<{ ok: true; deleted: number }>('POST', `/apps/${encodeURIComponent(id)}/reset-stats`),
+  rotateAppKey: (id: string) =>
+    send<{ ok: true; api_key: string }>('POST', `/apps/${encodeURIComponent(id)}/rotate-key`),
 
   prompts: (appID: string) =>
     request<{ prompts: PromptConfig[] }>(`/apps/${encodeURIComponent(appID)}/prompts`),
