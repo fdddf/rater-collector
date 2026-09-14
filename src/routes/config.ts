@@ -25,16 +25,20 @@ interface PromptConfigRow {
 /**
  * Used when the console has no copy configured at all, so a newly onboarded app works
  * end to end immediately. Kept in sync with `RaterCopy.default` on the client.
+ *
+ * `positive_label` / `negative_label` are the Rate and Feedback buttons. Both are offered
+ * to everyone, so they must name an action, not an opinion ("I like it" / "Not quite"
+ * would turn the prompt back into review gating, rejected under Guideline 5.6.1).
  */
 const FALLBACK: PromptConfigRow = {
   locale: '*',
   min_app_version: '0',
   enabled: 1,
   variant: 'default',
-  title: 'Enjoying this app?',
+  title: 'Help us improve',
   message: 'Your opinion matters to us — it only takes a few seconds.',
-  positive_label: 'I like it',
-  negative_label: 'Not quite',
+  positive_label: 'Rate App',
+  negative_label: 'Feedback',
   later_label: 'Maybe later',
   feedback_title: null,
   feedback_message: null,

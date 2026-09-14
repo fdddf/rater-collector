@@ -157,10 +157,10 @@ const BLANK: PromptDraft = {
   min_app_version: '0',
   enabled: true,
   variant: 'default',
-  title: 'Enjoying this app?',
+  title: 'Help us improve',
   message: 'Your opinion matters to us — it only takes a few seconds.',
-  positive_label: 'I like it',
-  negative_label: 'Not quite',
+  positive_label: 'Rate App',
+  negative_label: 'Feedback',
   later_label: 'Maybe later',
   feedback_title: '',
   feedback_message: '',
@@ -521,7 +521,7 @@ function PromptEditor({
             )}
           </Field>
           <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="Positive button">
+            <Field label="Rate button">
               {(id) => (
                 <Input
                   id={id}
@@ -530,7 +530,7 @@ function PromptEditor({
                 />
               )}
             </Field>
-            <Field label="Negative button">
+            <Field label="Feedback button">
               {(id) => (
                 <Input
                   id={id}
@@ -539,7 +539,7 @@ function PromptEditor({
                 />
               )}
             </Field>
-            <Field label="Later button">
+            <Field label="Close (VoiceOver label)">
               {(id) => (
                 <Input
                   id={id}
