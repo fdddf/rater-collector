@@ -49,6 +49,8 @@ export interface AppRecord {
 
 export type Variables = {
   app: AppRecord;
+  /** SHA-256 of the caller's reporter token — set by `requireReporter` on conversation routes. */
+  reporter?: string;
 };
 
 export type HonoEnv = { Bindings: Env; Variables: Variables };
@@ -63,6 +65,8 @@ export const LIMITS = {
   jsonBodyBytes: 64 * 1024,
   /** Upload token lifetime, in seconds. */
   uploadTokenTTL: 15 * 60,
+  /** Maximum characters in one conversation message. */
+  messageChars: 4000,
   /** Accepted attachment MIME types. */
   imageTypes: ['image/jpeg', 'image/png', 'image/heic', 'image/heif', 'image/webp'] as const,
 } as const;

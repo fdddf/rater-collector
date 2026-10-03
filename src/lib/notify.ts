@@ -1,6 +1,8 @@
 import { barkPushURL, notifyWebhookURL, type Env } from '../types';
 
 export interface NotifyPayload {
+  /** A new feedback, or the user writing back in its in-app conversation. Defaults to `feedback`. */
+  kind?: 'feedback' | 'reply';
   appName: string;
   appID: string;
   feedbackID: string;
@@ -25,8 +27,9 @@ interface Rendered {
 function render(env: Env, payload: NotifyPayload): Rendered {
   const detailURL = `${env.PUBLIC_BASE_URL}/admin#/feedback/${payload.feedbackID}`;
   const excerpt = payload.message.length > 300 ? `${payload.message.slice(0, 300)}…` : payload.message;
+  const isReply = payload.kind === 'reply';
   const summary = [
-    `📮 New feedback for ${payload.appName}`,
+    isReply ? `💬 New reply on feedback for ${payload.appName}` : `📮 New feedback for ${payload.appName}`,
     payload.category ? `Category: ${payload.category}` : null,
     `Message: ${excerpt}`,
     payload.email ? `Email: ${payload.email}` : null,
@@ -39,7 +42,8 @@ function render(env: Env, payload: NotifyPayload): Rendered {
     .filter(Boolean)
     .join('\n');
 
-  return { title: `New feedback — ${payload.appName}`, excerpt, summary, detailURL };
+  const title = `${isReply ? 'New reply' : 'New feedback'} — ${payload.appName}`;
+  return { title, excerpt, summary, detailURL };
 }
 
 async function post(url: string, body: unknown, label: string): Promise<void> {
@@ -56,7 +60,7 @@ async function post(url: string, body: unknown, label: string): Promise<void> {
 }
 
 /**
- * Pushes a new-feedback notification to every configured target.
+ * Pushes a new-feedback (or new-reply) notification to every configured target.
  *
  * For `NOTIFY_WEBHOOK_URL` the payload shape is picked from the webhook's host, so
  * anything unrecognised gets plain JSON — pointing it at a self-hosted endpoint needs
@@ -101,7 +105,7 @@ export async function notifyNewFeedback(env: Env, payload: NotifyPayload): Promi
       } else if (host.includes('bark') || host.includes('day.app')) {
         body = { title, body: excerpt, url: detailURL, group: 'rater' };
       } else {
-        body = { ...payload, detailURL, summary };
+        body = { ...payload, kind: payload.kind ?? 'feedback', detailURL, summary };
       }
       pushes.push(post(webhook, body, 'notify webhook'));
     }

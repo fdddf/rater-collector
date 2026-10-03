@@ -107,13 +107,25 @@ export const feedbackPatchSchema = z
     message: 'at least one field must be provided',
   });
 
+/** Request body for a user's message in an in-app conversation. */
+export const threadMessageSchema = z.object({
+  idempotency_key: z.string().trim().min(8).max(128),
+  body: z.string().trim().min(1).max(LIMITS.messageChars),
+});
+
+/** Request body for moving the user's read marker forward. */
+export const threadReadSchema = z.object({
+  seq: z.number().int().min(0),
+});
+
 /**
- * Request body for replying to one feedback by email.
+ * Request body for an admin message from the console.
  *
- * The recipient isn't in here: it's the address the user left on the feedback itself, so
- * the console can't be talked into mailing somewhere else.
+ * `email` asks for the same text to go out by email as well. The recipient isn't in here:
+ * it's the address the user left on the feedback itself, so the console can't be talked
+ * into mailing somewhere else.
  */
-export const feedbackReplySchema = z.object({
-  subject: z.string().trim().min(1).max(200),
+export const adminMessageSchema = z.object({
   body: z.string().trim().min(1).max(10000),
+  email: z.object({ subject: z.string().trim().min(1).max(200) }).optional(),
 });

@@ -140,6 +140,8 @@ Step one of three. The written content is stored first, then a 15-minute upload 
 
 Resubmitting the same `(app_id, idempotency_key)` returns `200` with the same record and `duplicate: true`. Together with the client's offline retry queue, a flaky network can't produce duplicate feedback.
 
+An optional `X-Rater-Reporter` header makes the feedback one of that device's [conversations](#conversations). A malformed one is ignored rather than refused — losing the message would be worse than losing the follow-up.
+
 ### `PUT /v1/feedback/:id/attachments/:idx`
 
 Step two. `Authorization: Bearer <upload_token>`, with the raw image bytes as the body.
@@ -154,9 +156,26 @@ Step three. Marks the feedback complete, counts the attachments that actually ar
 
 Batched `shown` / `positive` / `negative` / `dismissed` / `submitted` events, used to compute the conversion funnel. Carries no user identifiers.
 
+### Conversations
+
+Every feedback a device sends becomes a thread it can follow from inside the app, and that the console answers into. These endpoints need `X-Rater-Reporter: <token>` as well as the app key.
+
+The app key is public, so it can't say *who* is asking. The reporter token can: 32 random bytes the SDK generates once per install and keeps in the Keychain, sent with every feedback. D1 stores only its SHA-256. A thread belongs to the token it was sent with, and anything outside the caller's own threads is a plain `404`. Spam is hidden, and feedback that never completed isn't a thread.
+
+| Endpoint | |
+|---|---|
+| `GET /v1/threads?before=` | The caller's threads, most recent activity first: `{ id, status, category, preview, last_author, last_message_at, unread_count }`. `status` is only `open` or `resolved`. |
+| `GET /v1/threads/:id?after=<seq>` | The thread header plus its messages, or only those past `after` — what a client polls while the conversation is on screen. |
+| `POST /v1/threads/:id/messages` | `{ idempotency_key, body }` → `201 { message }`. Idempotent like submissions; writing back reopens a resolved thread and pushes a "New reply" notification. |
+| `POST /v1/threads/:id/read` | `{ seq }` moves the read marker. Forward only, and never past the newest message. |
+| `GET /v1/inbox` | `{ unread_count, unread_threads }` for the app's badge. |
+| `DELETE /v1/threads` | Erases everything this token ever sent — feedback, messages, screenshots. |
+
+Transport is polling. RaterKit asks every 5 seconds while a conversation is open, every 15 while the list is, and for `/v1/inbox` when the app comes to the foreground. Timestamps are Unix milliseconds; `seq` only ever grows, so `after=` never skips a message.
+
 ## Admin console
 
-`GET /admin` serves a React + TypeScript + Tailwind console. It covers feedback browsing and filtering, detail with screenshot previews, status and internal notes, replying to the user by email, single and bulk deletion (screenshots included, straight out of R2), conversion funnel stats with a per-app reset, **live copy editing** and batch translation, and app registration and deactivation. Light and dark themes follow the OS and can be overridden.
+`GET /admin` serves a React + TypeScript + Tailwind console. It covers feedback browsing and filtering (including threads awaiting a reply), detail with screenshot previews, status and internal notes, answering the user in an in-app conversation or by email, single and bulk deletion (screenshots included, straight out of R2), conversion funnel stats with a per-app reset, **live copy editing** and batch translation, and app registration and deactivation. Light and dark themes follow the OS and can be overridden.
 
 Signing in with `ADMIN_TOKEN` yields a 7-day HttpOnly cookie. In production, consider putting [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) in front of `/admin*` as a second layer.
 
@@ -186,9 +205,11 @@ npx wrangler secret put TRANSLATE_BASE_URL    # e.g. https://api.deepseek.com/v1
 
 Leave `TRANSLATE_API_KEY` unset and the Translate button simply doesn't appear; everything else in the console works as before.
 
-### Replying by email
+### Answering the user
 
-With [Resend](https://resend.com) configured, the feedback detail view gains a composer: subject, message, **Send reply**. The address comes from the feedback itself — never from the request — and every send is stored, so the dialog shows the thread of what the user has already been told.
+The feedback detail view shows the conversation and a composer. A message goes into the app by default — the user sees it the next time they open the conversation — and the dialog refreshes every 5 seconds while it's open, marking whatever the user wrote as read. A "Seen" mark appears once the user has opened your message.
+
+Feedback from an app version without conversations (no reporter token) can only be answered by email. With [Resend](https://resend.com) configured, any message can also be emailed, via an **Also email it** checkbox. The address comes from the feedback itself — never from the request — and a failed send stores nothing, so a message marked as emailed was accepted by the provider.
 
 ```bash
 npx wrangler secret put RESEND_API_KEY        # re_...
@@ -198,7 +219,7 @@ npx wrangler secret put RESEND_REPLY_TO       # optional; where the user's reply
 
 Two things worth knowing. The `RESEND_FROM` domain has to be verified in Resend (SPF/DKIM), or the send comes back as a 502 quoting the provider's complaint. And Resend only sends: the user's reply goes to `RESEND_REPLY_TO`, not back into the console — point it at a mailbox you actually read, e.g. an address that [Email Routing](https://developers.cloudflare.com/email-routing/) forwards to you.
 
-Leave `RESEND_API_KEY` unset and the detail view keeps its old `mailto:` button; nothing else changes.
+Leave `RESEND_API_KEY` unset and in-app messages work as before; email-only feedback gets the old `mailto:` button.
 
 ### Working on the console
 
@@ -212,7 +233,7 @@ npm run admin:build              # rebuild and re-inline — run this before com
 
 ## Notifications
 
-Every new feedback pushes once to each configured target. The two are independent — set both and both fire.
+Every new feedback — and every reply a user writes in a conversation, titled "New reply" — pushes once to each configured target. The two are independent — set both and both fire.
 
 ### Bark
 
@@ -232,7 +253,7 @@ With `NOTIFY_WEBHOOK_URL` set, the payload shape is picked from the host:
 | `*.slack.com` | `{ text }` |
 | `*.discord.com` | `{ content }` |
 | contains `bark` / `day.app` | `{ title, body, url, group }` |
-| anything else | generic JSON (all fields plus `detailURL` and `summary`) |
+| anything else | generic JSON (all fields plus `kind` — `feedback` or `reply` — `detailURL` and `summary`) |
 
 A push that fails is logged and dropped — it never fails the client's submit.
 
@@ -241,7 +262,7 @@ A push that fails is logged and dropped — it never fails the client's submit.
 The client API key ships inside the app binary, so it isn't a secret. Its job is to attribute traffic to an app and to let an abused key be revoked. The actual protection is layered:
 
 1. The key must exist in the `apps` table with `enabled = 1`.
-2. `SUBMIT_LIMIT` rate limits on `IP + app_id` at 5 submissions/minute; `READ_LIMIT` allows 60 reads/minute.
+2. `SUBMIT_LIMIT` rate limits on `IP + app_id` at 5 submissions/minute; `READ_LIMIT` allows 60 reads/minute; `MESSAGE_LIMIT` allows 20 conversation messages/minute. Conversation routes add the reporter to the key, so people behind one carrier NAT don't share a quota.
 3. Size caps: 64KB JSON body, 5MB per screenshot, at most 3 screenshots per feedback.
 4. Strict Zod validation: message 4–4000 characters, at most 20 metadata keys.
 5. A unique index on `(app_id, idempotency_key)` blocks replays.
@@ -266,7 +287,7 @@ Change one side, change the other. It's the one invariant that splitting into tw
 
 ## Data and privacy
 
-Feedback contains an email the user chose to give and device information collected automatically. Say so in your app's privacy policy before shipping, and consider an R2 lifecycle rule to age out old screenshots:
+Feedback contains an email the user chose to give and device information collected automatically, and is linked to a random per-install identifier (the reporter token) so the user can read the conversation back. Say so in your app's privacy policy before shipping — the token counts as an identifier on App Store privacy labels — and offer `DELETE /v1/threads` (RaterKit's `deleteConversationHistory()`) as the way to erase it all, and consider an R2 lifecycle rule to age out old screenshots:
 
 ```bash
 npx wrangler r2 bucket lifecycle add rater-attachments --name expire-old --expire-days 365

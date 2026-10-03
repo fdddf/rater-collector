@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { requireAppKey } from '../middleware/auth';
+import { reporterHash, requireAppKey } from '../middleware/auth';
 import { rateLimit } from '../middleware/ratelimit';
 import { newID, signUploadToken, verifyUploadToken } from '../lib/crypto';
 import { Errors } from '../lib/errors';
@@ -47,6 +47,11 @@ feedbackRoutes.post('/feedback', requireAppKey, rateLimit('SUBMIT_LIMIT'), async
     .bind(app.id, body.idempotency_key)
     .first<{ id: string; attachment_count: number; completed_at: number | null }>();
 
+  // Optional, and a malformed one is ignored rather than refused: the SDK's retry queue
+  // drops a submission the server answers with a 4xx, and losing what the user wrote is
+  // worse than losing the ability to follow up on it in the app.
+  const reporter = await reporterHash(c.req.header('X-Rater-Reporter'));
+
   const now = Date.now();
   let feedbackID: string;
 
@@ -60,8 +65,9 @@ feedbackRoutes.post('/feedback', requireAppKey, rateLimit('SUBMIT_LIMIT'), async
          id, app_id, created_at, status, category, message, email,
          app_version, build, bundle_id, os_version, device_model,
          locale, region, timezone, install_days, launch_count,
-         metadata_json, ip_country, idempotency_key, attachment_count
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         metadata_json, ip_country, idempotency_key, attachment_count,
+         reporter_hash, last_message_at
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
       .bind(
         feedbackID,
@@ -85,6 +91,8 @@ feedbackRoutes.post('/feedback', requireAppKey, rateLimit('SUBMIT_LIMIT'), async
         (c.req.raw.cf?.country as string | undefined) ?? null,
         body.idempotency_key,
         body.attachment_count,
+        reporter,
+        now,
       )
       .run();
   }

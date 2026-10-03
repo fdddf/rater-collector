@@ -3,13 +3,14 @@ import { requireAdmin } from '../middleware/auth';
 import { newID, sha256Hex, timingSafeEqual } from '../lib/crypto';
 import { Errors } from '../lib/errors';
 import {
+  adminMessageSchema,
   feedbackBulkDeleteSchema,
   feedbackPatchSchema,
-  feedbackReplySchema,
   promptConfigUpsertSchema,
   promptTranslateSchema,
 } from '../lib/schemas';
 import { emailConfig, emailConfigured, sendReplyEmail } from '../lib/email';
+import { deleteFeedback, MESSAGE_COLUMNS, type MessageRow } from '../lib/feedback';
 import {
   translateConfig,
   translateConfigured,
@@ -328,10 +329,16 @@ api.delete('/prompts/:pid', async (c) => {
 
 // ── Feedback ─────────────────────────────────────────────────────────────────
 
+/** The user's messages on feedback `f` that the console hasn't seen — correlated on `f`. */
+const UNREAD_FROM_USER = `FROM feedback_messages m
+   WHERE m.feedback_id = f.id AND m.author = 'user' AND m.seq > f.admin_read_seq`;
+
 api.get('/feedback', async (c) => {
   const appID = c.req.query('app_id');
   const status = c.req.query('status');
   const q = c.req.query('q');
+  // Threads where the user has written something the console hasn't opened since.
+  const unread = c.req.query('unread') === '1';
   const limit = Math.min(Number(c.req.query('limit') ?? 50) || 50, 200);
   // The cursor is the previous page's last created_at, paging along the
   // (app_id, created_at DESC) index.
@@ -343,12 +350,16 @@ api.get('/feedback', async (c) => {
   if (status) (where.push('f.status = ?'), args.push(status));
   if (q) (where.push('(f.message LIKE ? OR f.email LIKE ?)'), args.push(`%${q}%`, `%${q}%`));
   if (before) (where.push('f.created_at < ?'), args.push(before));
+  if (unread) where.push(`EXISTS (SELECT 1 ${UNREAD_FROM_USER})`);
   args.push(limit);
 
   const { results } = await c.env.DB.prepare(
     `SELECT f.id, f.app_id, a.name AS app_name, f.created_at, f.status, f.category,
             f.message, f.email, f.app_version, f.device_model, f.os_version,
-            f.ip_country, f.attachment_count
+            f.ip_country, f.attachment_count,
+            COALESCE(f.last_message_at, f.created_at) AS last_message_at,
+            f.reporter_hash IS NOT NULL AS in_app,
+            (SELECT COUNT(*) ${UNREAD_FROM_USER}) AS unread_count
        FROM feedback f JOIN apps a ON a.id = f.app_id
       WHERE ${where.join(' AND ')}
       ORDER BY f.created_at DESC LIMIT ?`,
@@ -364,6 +375,12 @@ api.get('/feedback', async (c) => {
   });
 });
 
+/**
+ * One feedback with its screenshots and conversation.
+ *
+ * Opening it is what marks the user's messages read for the console — the console polls
+ * this while the dialog is up, so whatever arrives meanwhile is read the moment it's shown.
+ */
 api.get('/feedback/:id', async (c) => {
   const id = c.req.param('id');
   const row = await c.env.DB.prepare(
@@ -379,16 +396,35 @@ api.get('/feedback/:id', async (c) => {
     .bind(id)
     .all();
 
-  const { results: replies } = await c.env.DB.prepare(
-    'SELECT id, to_email, subject, body, sent_at FROM feedback_replies WHERE feedback_id = ? ORDER BY sent_at',
+  const { results: messages } = await c.env.DB.prepare(
+    `SELECT ${MESSAGE_COLUMNS}, email_to, email_subject
+       FROM feedback_messages WHERE feedback_id = ? ORDER BY seq`,
   )
     .bind(id)
-    .all();
+    .all<MessageRow & { email_to: string | null; email_subject: string | null }>();
 
+  const list = messages ?? [];
+  const newest = list.at(-1)?.seq ?? 0;
+  if (newest > (row.admin_read_seq as number)) {
+    await c.env.DB.prepare('UPDATE feedback SET admin_read_seq = MAX(admin_read_seq, ?) WHERE id = ?')
+      .bind(newest, id)
+      .run();
+  }
+
+  // The hash is a credential's fingerprint and means nothing to a person — what the
+  // console needs is whether the user can see an in-app message at all.
+  const { reporter_hash, user_read_seq, admin_read_seq, last_message_at, ...feedback } = row;
   return c.json({
-    feedback: { ...row, metadata: safeParse(row.metadata_json as string | null, null) },
+    feedback: {
+      ...feedback,
+      last_message_at: last_message_at ?? feedback.created_at,
+      in_app: reporter_hash !== null,
+      metadata: safeParse(row.metadata_json as string | null, null),
+    },
     attachments: results ?? [],
-    replies: replies ?? [],
+    messages: list,
+    // Everything up to here the user has seen in the app — for a "Seen" mark in the console.
+    user_read_seq,
   });
 });
 
@@ -412,41 +448,63 @@ api.patch('/feedback/:id', async (c) => {
 });
 
 /**
- * Emails the user who left this feedback, through Resend.
+ * The console writes to the user.
  *
- * The recipient comes from the stored `feedback.email`, never from the request body: the
- * console is a reply box, not a mailer someone can point anywhere. Only successful sends
- * are recorded, so `feedback_replies` is the log of what actually went out.
+ * The message lands in the in-app conversation, and with `email` also goes out through
+ * Resend. Feedback from a client without conversations (no reporter token) can only be
+ * answered by email, so there `email` is required. The recipient comes from the stored
+ * `feedback.email`, never from the request body: the console is a reply box, not a mailer
+ * someone can point anywhere.
+ *
+ * The email goes first and a failed send stores nothing, so a message in the timeline that
+ * says it was emailed means the provider accepted it.
  */
-api.post('/feedback/:id/reply', async (c) => {
-  // Before the body is parsed, so a missing secret is one error naming the variable
-  // rather than a validation complaint about copy that was fine.
-  const config = emailConfig(c.env);
-
-  const parsed = feedbackReplySchema.safeParse(await c.req.json().catch(() => null));
+api.post('/feedback/:id/messages', async (c) => {
+  const parsed = adminMessageSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     throw Errors.badRequest(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
   }
+  const { body, email } = parsed.data;
 
   const id = c.req.param('id');
-  const row = await c.env.DB.prepare('SELECT id, email FROM feedback WHERE id = ?')
+  const row = await c.env.DB.prepare('SELECT id, email, reporter_hash FROM feedback WHERE id = ?')
     .bind(id)
-    .first<{ id: string; email: string | null }>();
+    .first<{ id: string; email: string | null; reporter_hash: string | null }>();
   if (!row) throw Errors.notFound('No such feedback.');
-  if (!row.email) throw Errors.badRequest('This feedback was submitted without an email address.');
 
-  const { subject, body } = parsed.data;
-  const providerID = await sendReplyEmail(config, { to: row.email, subject, body });
+  if (!email && row.reporter_hash === null) {
+    throw Errors.badRequest(
+      'This feedback came from an app version without in-app conversations — reply by email instead.',
+    );
+  }
 
-  const reply = { id: newID('rep'), to_email: row.email, subject, body, sent_at: Date.now() };
-  await c.env.DB.prepare(
-    `INSERT INTO feedback_replies (id, feedback_id, to_email, subject, body, provider, provider_id, sent_at)
-     VALUES (?,?,?,?,?, 'resend', ?, ?)`,
+  let emailed: { to: string; subject: string; providerID: string } | null = null;
+  if (email) {
+    const config = emailConfig(c.env);
+    if (!row.email) throw Errors.badRequest('This feedback was submitted without an email address.');
+    const providerID = await sendReplyEmail(config, { to: row.email, subject: email.subject, body });
+    emailed = { to: row.email, subject: email.subject, providerID };
+  }
+
+  const now = Date.now();
+  const message = await c.env.DB.prepare(
+    `INSERT INTO feedback_messages
+       (id, feedback_id, author, body, email_to, email_subject, email_provider_id, created_at)
+     VALUES (?, ?, 'admin', ?, ?, ?, ?, ?)
+     RETURNING ${MESSAGE_COLUMNS}, email_to, email_subject`,
   )
-    .bind(reply.id, id, reply.to_email, reply.subject, reply.body, providerID, reply.sent_at)
+    .bind(newID('msg'), id, body, emailed?.to ?? null, emailed?.subject ?? null,
+      emailed?.providerID ?? null, now)
+    .first<MessageRow & { email_to: string | null; email_subject: string | null }>();
+
+  // Answering is reading: whatever the user wrote before this is no longer waiting.
+  await c.env.DB.prepare(
+    'UPDATE feedback SET last_message_at = ?, admin_read_seq = MAX(admin_read_seq, ?) WHERE id = ?',
+  )
+    .bind(now, message!.seq, id)
     .run();
 
-  return c.json({ reply }, 201);
+  return c.json({ message }, 201);
 });
 
 api.delete('/feedback/:id', async (c) => {
@@ -463,41 +521,6 @@ api.post('/feedback/bulk-delete', async (c) => {
   }
   return c.json({ ok: true, deleted: await deleteFeedback(c.env, parsed.data.ids) });
 });
-
-/**
- * Deletes feedback rows and the screenshots behind them.
- *
- * Order matters: the R2 keys only exist in the `attachments` rows, so they have to be
- * read and the objects dropped *before* the rows go — reversing it strands the images in
- * the bucket with nothing left pointing at them.
- */
-async function deleteFeedback(env: HonoEnv['Bindings'], ids: string[]): Promise<number> {
-  const placeholders = ids.map(() => '?').join(',');
-
-  const { results } = await env.DB.prepare(
-    `SELECT r2_key FROM attachments WHERE feedback_id IN (${placeholders})`,
-  )
-    .bind(...ids)
-    .all<{ r2_key: string }>();
-
-  const keys = (results ?? []).map((r) => r.r2_key);
-  if (keys.length > 0) await env.ATTACHMENTS.delete(keys);
-
-  // ON DELETE CASCADE would cover the child rows, but foreign-key enforcement is a
-  // database setting rather than something this code controls — so say it explicitly.
-  await env.DB.prepare(`DELETE FROM attachments WHERE feedback_id IN (${placeholders})`)
-    .bind(...ids)
-    .run();
-
-  await env.DB.prepare(`DELETE FROM feedback_replies WHERE feedback_id IN (${placeholders})`)
-    .bind(...ids)
-    .run();
-
-  const res = await env.DB.prepare(`DELETE FROM feedback WHERE id IN (${placeholders})`)
-    .bind(...ids)
-    .run();
-  return res.meta.changes;
-}
 
 /** Serves the original image from R2. Keys contain slashes, hence the wildcard route. */
 api.get('/attachments/:key{.+}', async (c) => {

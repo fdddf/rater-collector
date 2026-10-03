@@ -52,3 +52,30 @@ function readCookie(header: string | undefined, name: string): string | null {
   }
   return null;
 }
+
+/**
+ * The SDK's per-install reporter token: 32 random bytes, base64url. The bounds leave room
+ * for a longer token later without letting a header of arbitrary size through.
+ */
+const REPORTER_TOKEN = /^[A-Za-z0-9_-]{32,128}$/;
+
+/** Hashes a well-formed `X-Rater-Reporter` header, or returns null for a missing or malformed one. */
+export async function reporterHash(header: string | undefined): Promise<string | null> {
+  if (!header || !REPORTER_TOKEN.test(header)) return null;
+  return sha256Hex(header);
+}
+
+/**
+ * Conversation endpoints: `X-Rater-Reporter: <token>`, after `requireAppKey`.
+ *
+ * The app key says which app is calling and nothing about who — anyone can lift it out of
+ * the binary. Owning a thread is proved by the reporter token instead: a random secret the
+ * SDK generated on this device and has sent with every feedback since. Like app keys, D1
+ * keeps only its SHA-256, so a database leak doesn't hand out read access to every thread.
+ */
+export const requireReporter = createMiddleware<HonoEnv>(async (c, next) => {
+  const hash = await reporterHash(c.req.header('X-Rater-Reporter'));
+  if (!hash) throw Errors.unauthorized('Missing or malformed X-Rater-Reporter token.');
+  c.set('reporter', hash);
+  await next();
+});

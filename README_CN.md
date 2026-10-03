@@ -136,6 +136,8 @@ npm run e2e
 
 同一个 `(app_id, idempotency_key)` 重复提交返回 `200` 和同一条记录（`duplicate: true`），配合客户端的离线重试队列，网络抖动不会产生重复反馈。
 
+可选的 `X-Rater-Reporter` 头会让这条反馈成为该设备的一个[会话](#会话)。格式不对的头会被忽略而不是拒绝 —— 丢掉用户写的内容比丢掉后续追问更糟。
+
 ### `PUT /v1/feedback/:id/attachments/:idx`
 
 第二步。头带 `Authorization: Bearer <upload_token>`，body 是图片原始字节。
@@ -150,9 +152,26 @@ npm run e2e
 
 批量上报 `shown` / `positive` / `negative` / `dismissed` / `submitted` 事件，用来在后台算转化漏斗。不含任何用户标识。
 
+### 会话
+
+设备发出的每条反馈都会成为一个会话：用户能在 app 里接着看、接着回，后台的回复也发到这里。这些接口除了 app key，还要带 `X-Rater-Reporter: <token>`。
+
+App key 是公开的，分辨不出"是谁在问"。reporter token 可以：SDK 每次安装生成一次的 32 字节随机数，存在 Keychain 里，随每条反馈一起发送。D1 只存它的 SHA-256。会话归属于发送时用的那个 token，别人的会话一律返回 `404`。标成 spam 的不显示，没走完提交流程的反馈也不算会话。
+
+| 接口 | |
+|---|---|
+| `GET /v1/threads?before=` | 调用方自己的会话，按最近活动倒序：`{ id, status, category, preview, last_author, last_message_at, unread_count }`。`status` 只有 `open` 和 `resolved`。 |
+| `GET /v1/threads/:id?after=<seq>` | 会话头加全部消息，或只返回 `after` 之后的 —— 会话页打开时客户端轮询的就是它。 |
+| `POST /v1/threads/:id/messages` | `{ idempotency_key, body }` → `201 { message }`。和提交一样幂等；用户回复会把已解决的会话重新打开，并推送一条 "New reply" 通知。 |
+| `POST /v1/threads/:id/read` | `{ seq }` 推进已读位置。只进不退，也不会超过最新一条。 |
+| `GET /v1/inbox` | `{ unread_count, unread_threads }`，给 app 里的角标用。 |
+| `DELETE /v1/threads` | 删除这个 token 发过的一切 —— 反馈、消息、截图。 |
+
+传输方式是轮询。RaterKit 在会话页打开时每 5 秒拉一次，列表页每 15 秒，app 回到前台时拉一次 `/v1/inbox`。时间戳是 Unix 毫秒；`seq` 只增不减，所以 `after=` 不会漏消息。
+
 ## 管理后台
 
-`GET /admin` 是一个 React + TypeScript + Tailwind 写的控制台：反馈列表与筛选、详情与截图预览、状态与备注、邮件回复用户、单条或批量删除（连同 R2 里的截图一起清掉）、转化漏斗统计与按应用重置、**在线改文案**及多语言翻译、应用注册与停用。明暗主题跟随系统，也可以手动切换。
+`GET /admin` 是一个 React + TypeScript + Tailwind 写的控制台：反馈列表与筛选（包括待回复的会话）、详情与截图预览、状态与备注、在 app 内会话或邮件里回复用户、单条或批量删除（连同 R2 里的截图一起清掉）、转化漏斗统计与按应用重置、**在线改文案**及多语言翻译、应用注册与停用。明暗主题跟随系统，也可以手动切换。
 
 用 `ADMIN_TOKEN` 登录换一个 7 天的 HttpOnly cookie。生产环境建议在 `/admin*` 前再叠一层 [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)。
 
@@ -182,9 +201,11 @@ npx wrangler secret put TRANSLATE_BASE_URL    # 例如 https://api.deepseek.com/
 
 不设 `TRANSLATE_API_KEY` 的话翻译按钮不会出现，后台其余功能照常。
 
-### 邮件回复
+### 回复用户
 
-配好 [Resend](https://resend.com) 之后，反馈详情里会多出一个撰写框：主题、正文、**发送回复**。收件地址取自这条反馈本身，不接受请求里传入，发出去的每一封都会存下来，所以弹窗里能看到之前跟这个用户说过什么。
+反馈详情里有会话记录和撰写框。消息默认发到 app 内 —— 用户下次打开会话就能看到。弹窗打开期间每 5 秒刷新一次，并把用户新写的内容标为已读；用户打开过你的消息后会显示 "Seen"。
+
+来自不支持会话的旧版本 app 的反馈（没有 reporter token）只能用邮件回复。配好 [Resend](https://resend.com) 之后，任何消息都可以勾选 **Also email it** 同时发邮件。收件地址取自这条反馈本身，不接受请求里传入；发信失败什么都不存，所以标着已发邮件的消息一定被服务商接收了。
 
 ```bash
 npx wrangler secret put RESEND_API_KEY        # re_...
@@ -194,7 +215,7 @@ npx wrangler secret put RESEND_REPLY_TO       # 可选；用户回信落到哪�
 
 有两点要注意。`RESEND_FROM` 的域名必须在 Resend 里验证过（SPF/DKIM），否则发信会返回 502 并带上服务商的原话。另外 Resend 只负责发信：用户点回复是寄到 `RESEND_REPLY_TO`，不会回到后台里 —— 所以填一个你真的会看的邮箱，比如用 [Email Routing](https://developers.cloudflare.com/email-routing/) 转发到自己私人邮箱的地址。
 
-不设 `RESEND_API_KEY` 的话，详情页仍是原来那个 `mailto:` 按钮，其余功能不受影响。
+不设 `RESEND_API_KEY` 的话，app 内消息照常可用；只能走邮件的反馈仍是原来那个 `mailto:` 按钮。
 
 ### 改后台界面
 
@@ -208,7 +229,7 @@ npm run admin:build              # 重新构建并内联 —— 改完界面提�
 
 ## 通知
 
-每条新反馈会往所有已配置的通道各推一次。两个通道互相独立，都配就都推。
+每条新反馈 —— 以及用户在会话里的每条回复（标题为 "New reply"）—— 会往所有已配置的通道各推一次。两个通道互相独立，都配就都推。
 
 ### Bark
 
@@ -228,7 +249,7 @@ npx wrangler secret put BARK_DEVICE_KEY
 | `*.slack.com` | `{ text }` |
 | `*.discord.com` | `{ content }` |
 | 含 `bark` / `day.app` | `{ title, body, url, group }` |
-| 其它 | 通用 JSON（含全部字段 + `detailURL` + `summary`） |
+| 其它 | 通用 JSON（含全部字段 + `kind`（`feedback` 或 `reply`）+ `detailURL` + `summary`） |
 
 推送失败只记日志，不会影响客户端提交。
 
@@ -237,7 +258,7 @@ npx wrangler secret put BARK_DEVICE_KEY
 客户端 API Key 会随 app 二进制分发，本身不算机密 —— 它的作用是把流量归属到某个 app，并且让被滥用的 key 可以随时停用。真正挡刷子的是这几层：
 
 1. Key 必须在 `apps` 表里且 `enabled = 1`
-2. `SUBMIT_LIMIT` 按 `IP + app_id` 限流，提交 5 次/分钟；`READ_LIMIT` 读接口 60 次/分钟
+2. `SUBMIT_LIMIT` 按 `IP + app_id` 限流，提交 5 次/分钟；`READ_LIMIT` 读接口 60 次/分钟；`MESSAGE_LIMIT` 会话消息 20 条/分钟。会话接口的限流 key 里还带上 reporter，同一个运营商 NAT 后面的用户不会共用额度
 3. 体积上限：JSON body 64KB、单张截图 5MB、每条反馈最多 3 张
 4. Zod 严格校验，正文限 4–4000 字，metadata 最多 20 组键值
 5. `(app_id, idempotency_key)` 唯一索引挡重放
@@ -262,7 +283,7 @@ npx wrangler secret put BARK_DEVICE_KEY
 
 ## 数据与隐私
 
-反馈里会包含用户主动填写的邮箱和自动采集的设备信息。上线前记得在 app 的隐私政策里说明，并按需要设置 R2 的生命周期规则自动清理旧截图：
+反馈里会包含用户主动填写的邮箱和自动采集的设备信息，并关联一个每次安装随机生成的标识（reporter token），用户才能在 app 里看回自己的会话。上线前记得在 app 的隐私政策里说明 —— 在 App Store 隐私标签里这个 token 算标识符 —— 并提供 `DELETE /v1/threads`（RaterKit 的 `deleteConversationHistory()`）作为一键删除的入口，并按需要设置 R2 的生命周期规则自动清理旧截图：
 
 ```bash
 npx wrangler r2 bucket lifecycle add rater-attachments --name expire-old --expire-days 365

@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Inbox, Paperclip, Search, Trash2 } from 'lucide-react';
+import { Inbox, MessagesSquare, Paperclip, Search, Trash2 } from 'lucide-react';
 import { api, UnauthorizedError } from '../lib/api';
 import { fmtRelative, fmtTime } from '../lib/format';
 import type { FeedbackRow } from '../lib/types';
-import { Badge, Button, Card, EmptyState, Input, Select, Spinner, statusTone, useToast } from '../components/ui';
+import {
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  EmptyState,
+  Input,
+  Select,
+  Spinner,
+  statusTone,
+  useToast,
+} from '../components/ui';
 import FeedbackDetail from './FeedbackDetail';
 
 const STATUSES = ['', 'open', 'resolved', 'spam', 'pending'] as const;
@@ -12,6 +23,7 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
   const toast = useToast();
   const [status, setStatus] = useState('');
   const [query, setQuery] = useState('');
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [rows, setRows] = useState<FeedbackRow[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,7 +38,13 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
     async (before: number | null) => {
       setLoading(true);
       try {
-        const data = await api.feedback({ app_id: appID, status, q: query.trim(), before });
+        const data = await api.feedback({
+          app_id: appID,
+          status,
+          q: query.trim(),
+          unread: unreadOnly,
+          before,
+        });
         setRows((prev) => (before === null ? data.items : [...prev, ...data.items]));
         setCursor(data.next_before);
         // A first page replaces the list, so anything ticked before it is gone from view.
@@ -38,7 +56,7 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
         setLoading(false);
       }
     },
-    [appID, status, query, toast, onUnauthorized],
+    [appID, status, query, unreadOnly, toast, onUnauthorized],
   );
 
   function toggleOne(id: string) {
@@ -107,6 +125,11 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
             </option>
           ))}
         </Select>
+        <Checkbox
+          label="Awaiting reply"
+          checked={unreadOnly}
+          onChange={(e) => setUnreadOnly(e.target.checked)}
+        />
         <Button onClick={() => load(null)} busy={loading && rows.length === 0}>
           Refresh
         </Button>
@@ -187,6 +210,12 @@ export default function Feedback({ appID, onUnauthorized }: { appID: string; onU
                     <td className="max-w-md px-4 py-3 align-top">
                       <p className="line-clamp-2 text-ink">{f.message}</p>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        {f.unread_count > 0 && (
+                          <Badge tone="open" className="tnum">
+                            <MessagesSquare className="size-3" />
+                            {f.unread_count} new
+                          </Badge>
+                        )}
                         {f.category && <Badge>{f.category}</Badge>}
                         {!!f.attachment_count && (
                           <span className="inline-flex items-center gap-1 text-xs text-ink-3">

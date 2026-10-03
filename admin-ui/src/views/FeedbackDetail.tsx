@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Mail, Send, Trash2 } from 'lucide-react';
+import { CheckCheck, Mail, MessagesSquare, Send, Trash2 } from 'lucide-react';
 import { api, attachmentURL, UnauthorizedError } from '../lib/api';
 import { fmtBytes, fmtTime } from '../lib/format';
 import type {
   Attachment,
   FeedbackDetail as Detail,
-  FeedbackReply,
+  FeedbackMessage,
   FeedbackStatus,
 } from '../lib/types';
 import {
   Badge,
   Button,
+  Checkbox,
+  cx,
   Field,
   Input,
   Modal,
@@ -25,6 +27,9 @@ import {
 const replySubject = (f: Detail) => `Re: your feedback · ${f.app_name}`;
 
 const STATUSES: FeedbackStatus[] = ['open', 'resolved', 'spam', 'pending'];
+
+/** How often an open dialog picks up new messages — the same cadence the SDK polls at. */
+const POLL_MS = 5000;
 
 /** The diagnostics the client attaches, laid out as a definition list. */
 function diagnostics(f: Detail): [string, string][] {
@@ -62,13 +67,15 @@ export default function FeedbackDetail({
   const toast = useToast();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [replies, setReplies] = useState<FeedbackReply[]>([]);
+  const [messages, setMessages] = useState<FeedbackMessage[]>([]);
+  const [userReadSeq, setUserReadSeq] = useState(0);
   const [status, setStatus] = useState<string>('open');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [subject, setSubject] = useState('');
   const [replyBody, setReplyBody] = useState('');
+  const [alsoEmail, setAlsoEmail] = useState(false);
   const [sending, setSending] = useState(false);
   // Whether the server has Resend credentials. Failing quietly leaves the mailto: fallback.
   const [canReply, setCanReply] = useState(false);
@@ -100,11 +107,13 @@ export default function FeedbackDetail({
         if (cancelled) return;
         setDetail(data.feedback);
         setAttachments(data.attachments);
-        setReplies(data.replies);
+        setMessages(data.messages);
+        setUserReadSeq(data.user_read_seq);
         setStatus(data.feedback.status);
         setNote(data.feedback.admin_note ?? '');
         setSubject(replySubject(data.feedback));
         setReplyBody('');
+        setAlsoEmail(false);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -116,6 +125,31 @@ export default function FeedbackDetail({
     return () => {
       cancelled = true;
     };
+  }, [id]);
+
+  // While the dialog is open, pick up what the user writes in the meantime. Only the
+  // conversation is refreshed — status and note may be mid-edit and must not be reset
+  // under the cursor. A hidden tab skips its turn rather than polling nobody.
+  useEffect(() => {
+    if (!id) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      api
+        .feedbackDetail(id)
+        .then((data) => {
+          setMessages((prev) =>
+            data.messages.length === prev.length && data.messages.at(-1)?.id === prev.at(-1)?.id
+              ? prev
+              : data.messages,
+          );
+          setUserReadSeq(data.user_read_seq);
+        })
+        .catch((err) => {
+          if (err instanceof UnauthorizedError) handlers.current.onUnauthorized();
+          // Anything else is one missed beat; the next one tries again.
+        });
+    }, POLL_MS);
+    return () => clearInterval(timer);
   }, [id]);
 
   async function save() {
@@ -134,13 +168,15 @@ export default function FeedbackDetail({
   }
 
   async function sendReply() {
-    if (!id) return;
+    if (!id || !detail) return;
+    // Without a reporter token the user can't see an in-app message, so email is the only way.
+    const email = alsoEmail || !detail.in_app ? { subject } : undefined;
     setSending(true);
     try {
-      const { reply } = await api.replyToFeedback(id, { subject, body: replyBody });
-      setReplies((prev) => [...prev, reply]);
+      const { message } = await api.sendMessage(id, { body: replyBody, email });
+      setMessages((prev) => [...prev, message]);
       setReplyBody('');
-      toast('Reply sent');
+      toast(email ? 'Sent and emailed' : 'Sent');
     } catch (err) {
       if (err instanceof UnauthorizedError) return onUnauthorized();
       toast(err instanceof Error ? err.message : 'Send failed', 'error');
@@ -266,68 +302,20 @@ export default function FeedbackDetail({
             ))}
           </dl>
 
-          {detail.email && (
-            <section className="space-y-3 rounded-xl ring-1 ring-border ring-inset p-4">
-              <header className="flex items-center gap-2 text-xs font-medium text-ink-2">
-                <Mail className="size-4 text-ink-3" />
-                Email reply
-                <span className="text-ink-3">to {detail.email}</span>
-              </header>
-
-              {replies.length > 0 && (
-                <ol className="space-y-2">
-                  {replies.map((r) => (
-                    <li key={r.id} className="rounded-lg bg-surface-2 p-3 text-[13px]">
-                      <div className="flex flex-wrap items-baseline gap-2">
-                        <span className="font-medium">{r.subject}</span>
-                        <span className="text-xs text-ink-3">{fmtTime(r.sent_at)}</span>
-                      </div>
-                      <p className="mt-1 whitespace-pre-wrap text-ink-2">{r.body}</p>
-                    </li>
-                  ))}
-                </ol>
-              )}
-
-              {canReply ? (
-                <>
-                  <Field label="Subject">
-                    {(fid) => (
-                      <Input
-                        id={fid}
-                        value={subject}
-                        onChange={(e) => setSubject(e.target.value)}
-                      />
-                    )}
-                  </Field>
-                  <Field label="Message">
-                    {(fid) => (
-                      <Textarea
-                        id={fid}
-                        value={replyBody}
-                        onChange={(e) => setReplyBody(e.target.value)}
-                        rows={6}
-                        placeholder="Sent to the user as plain text. Their reply goes to your support inbox, not back into this console."
-                      />
-                    )}
-                  </Field>
-                  <Button
-                    variant="primary"
-                    busy={sending}
-                    disabled={!subject.trim() || !replyBody.trim()}
-                    onClick={sendReply}
-                  >
-                    <Send className="size-4" />
-                    Send reply
-                  </Button>
-                </>
-              ) : (
-                <p className="text-xs text-ink-3">
-                  Sending from the console needs the RESEND_API_KEY and RESEND_FROM secrets. Until
-                  they're set, use the “Reply by email” button below to open your mail client.
-                </p>
-              )}
-            </section>
-          )}
+          <Conversation
+            detail={detail}
+            messages={messages}
+            userReadSeq={userReadSeq}
+            canEmail={canReply && !!detail.email}
+            alsoEmail={alsoEmail}
+            setAlsoEmail={setAlsoEmail}
+            subject={subject}
+            setSubject={setSubject}
+            body={replyBody}
+            setBody={setReplyBody}
+            sending={sending}
+            onSend={sendReply}
+          />
 
           <Field label="Internal note">
             {(fid) => (
@@ -342,5 +330,147 @@ export default function FeedbackDetail({
         </div>
       )}
     </Modal>
+  );
+}
+
+/**
+ * The thread after the feedback itself, and the composer.
+ *
+ * A message goes into the app by default. Email is an extra the admin opts into per
+ * message — or the only route, for feedback from a client that predates conversations.
+ */
+function Conversation({
+  detail,
+  messages,
+  userReadSeq,
+  canEmail,
+  alsoEmail,
+  setAlsoEmail,
+  subject,
+  setSubject,
+  body,
+  setBody,
+  sending,
+  onSend,
+}: {
+  detail: Detail;
+  messages: FeedbackMessage[];
+  userReadSeq: number;
+  canEmail: boolean;
+  alsoEmail: boolean;
+  setAlsoEmail: (v: boolean) => void;
+  subject: string;
+  setSubject: (v: string) => void;
+  body: string;
+  setBody: (v: string) => void;
+  sending: boolean;
+  onSend: () => void;
+}) {
+  const emailOnly = !detail.in_app;
+  const emailing = emailOnly || alsoEmail;
+  const canCompose = detail.in_app || canEmail;
+
+  // Nothing to show and no way to say anything: leave the footer's mailto: to it.
+  if (messages.length === 0 && !canCompose) return null;
+
+  return (
+    <section className="space-y-3 rounded-xl ring-1 ring-border ring-inset p-4">
+      <header className="flex flex-wrap items-center gap-2 text-xs font-medium text-ink-2">
+        <MessagesSquare className="size-4 text-ink-3" />
+        Conversation
+        <span className="font-normal text-ink-3">
+          {emailOnly
+            ? 'This app version predates in-app conversations — replies go by email.'
+            : 'Replies show up in the app.'}
+        </span>
+      </header>
+
+      {messages.length > 0 && (
+        <ol className="space-y-2">
+          {messages.map((m) => {
+            const mine = m.author === 'admin';
+            return (
+              <li key={m.id} className={cx('flex', mine ? 'justify-end' : 'justify-start')}>
+                <div
+                  className={cx(
+                    'max-w-[85%] rounded-xl p-3 text-[13px]',
+                    mine ? 'bg-accent-wash ring-1 ring-accent/30 ring-inset' : 'bg-surface-2',
+                  )}
+                >
+                  <p className="whitespace-pre-wrap text-ink">{m.body}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-ink-3">
+                    <span>{mine ? 'You' : 'User'} · {fmtTime(m.created_at)}</span>
+                    {m.email_to && (
+                      <span className="inline-flex items-center gap-1" title={m.email_subject ?? ''}>
+                        <Mail className="size-3" />
+                        emailed to {m.email_to}
+                      </span>
+                    )}
+                    {mine && detail.in_app && m.seq <= userReadSeq && (
+                      <span className="inline-flex items-center gap-1">
+                        <CheckCheck className="size-3" />
+                        Seen
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+
+      {canCompose ? (
+        <>
+          <Field label="Message">
+            {(fid) => (
+              <Textarea
+                id={fid}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={4}
+                placeholder={
+                  emailOnly
+                    ? 'Sent to the user as plain text. Their reply goes to your support inbox, not back into this console.'
+                    : 'Plain text. The user sees it next time they open the conversation in the app.'
+                }
+              />
+            )}
+          </Field>
+          {!emailOnly && canEmail && (
+            <Checkbox
+              label={`Also email it to ${detail.email}`}
+              checked={alsoEmail}
+              onChange={(e) => setAlsoEmail(e.target.checked)}
+            />
+          )}
+          {emailing && (
+            <Field label="Email subject">
+              {(fid) => (
+                <Input id={fid} value={subject} onChange={(e) => setSubject(e.target.value)} />
+              )}
+            </Field>
+          )}
+          <Button
+            variant="primary"
+            busy={sending}
+            disabled={!body.trim() || (emailing && !subject.trim())}
+            onClick={onSend}
+          >
+            <Send className="size-4" />
+            {emailOnly ? 'Send email' : 'Send'}
+          </Button>
+        </>
+      ) : detail.email ? (
+        <p className="text-xs text-ink-3">
+          Sending from the console needs the RESEND_API_KEY and RESEND_FROM secrets. Until
+          they're set, use the “Reply by email” button below to open your mail client.
+        </p>
+      ) : (
+        <p className="text-xs text-ink-3">
+          No email address was left, and this app version can't receive in-app replies.
+        </p>
+      )}
+    </section>
   );
 }

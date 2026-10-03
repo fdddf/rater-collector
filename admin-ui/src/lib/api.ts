@@ -2,7 +2,7 @@ import type {
   App,
   Attachment,
   FeedbackDetail,
-  FeedbackReply,
+  FeedbackMessage,
   FeedbackRow,
   NewAppResult,
   PromptConfig,
@@ -40,6 +40,8 @@ export interface FeedbackQuery {
   app_id?: string;
   status?: string;
   q?: string;
+  /** Only feedback whose user has written something the console hasn't opened. */
+  unread?: boolean;
   before?: number | null;
 }
 
@@ -69,15 +71,20 @@ export const api = {
 
   feedback: (query: FeedbackQuery) => {
     const p = new URLSearchParams();
-    for (const [k, v] of Object.entries(query)) if (v) p.set(k, String(v));
+    for (const [k, v] of Object.entries(query)) if (v) p.set(k, v === true ? '1' : String(v));
     return request<{ items: FeedbackRow[]; next_before: number | null }>(`/feedback?${p}`);
   },
   feedbackDetail: (id: string) =>
-    request<{ feedback: FeedbackDetail; attachments: Attachment[]; replies: FeedbackReply[] }>(
-      `/feedback/${encodeURIComponent(id)}`,
-    ),
-  replyToFeedback: (id: string, body: { subject: string; body: string }) =>
-    send<{ reply: FeedbackReply }>('POST', `/feedback/${encodeURIComponent(id)}/reply`, body),
+    request<{
+      feedback: FeedbackDetail;
+      attachments: Attachment[];
+      messages: FeedbackMessage[];
+      /** The user has seen every message up to this seq in the app. */
+      user_read_seq: number;
+    }>(`/feedback/${encodeURIComponent(id)}`),
+  /** Posts into the in-app conversation; with `email`, also sends the same text by email. */
+  sendMessage: (id: string, body: { body: string; email?: { subject: string } }) =>
+    send<{ message: FeedbackMessage }>('POST', `/feedback/${encodeURIComponent(id)}/messages`, body),
   patchFeedback: (id: string, body: { status?: string; admin_note?: string }) =>
     send<{ ok: true }>('PATCH', `/feedback/${encodeURIComponent(id)}`, body),
   deleteFeedback: (id: string) =>

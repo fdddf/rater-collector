@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { configRoutes } from './routes/config';
 import { feedbackRoutes } from './routes/feedback';
 import { telemetryRoutes } from './routes/telemetry';
+import { threadRoutes } from './routes/threads';
 import { adminRoutes } from './routes/admin';
 import type { HonoEnv } from './types';
 
@@ -13,8 +14,8 @@ const app = new Hono<HonoEnv>();
 // the API convenient to poke at from browser-based tools.
 app.use('/v1/*', cors({
   origin: '*',
-  allowHeaders: ['Content-Type', 'X-Rater-Key', 'Authorization', 'If-None-Match'],
-  allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'X-Rater-Key', 'X-Rater-Reporter', 'Authorization', 'If-None-Match'],
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   maxAge: 86400,
 }));
 
@@ -23,6 +24,7 @@ app.get('/health', (c) => c.json({ ok: true }));
 app.route('/v1', configRoutes);
 app.route('/v1', feedbackRoutes);
 app.route('/v1', telemetryRoutes);
+app.route('/v1', threadRoutes);
 
 // A bookmarked or hand-typed "/admin/" would otherwise fall through to the JSON 404.
 app.get('/admin/', (c) => c.redirect('/admin', 301));

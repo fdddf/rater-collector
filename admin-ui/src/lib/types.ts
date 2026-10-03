@@ -32,10 +32,18 @@ export interface FeedbackRow {
   os_version: string | null;
   ip_country: string | null;
   attachment_count: number | null;
+  /** The newest message in either direction — the feedback itself counts. */
+  last_message_at: number;
+  /** SQLite's boolean: 1 when the feedback came with a reporter token, so in-app messages reach the user. */
+  in_app: 0 | 1;
+  /** Messages from the user the console hasn't opened yet. */
+  unread_count: number;
 }
 
 /** `GET /feedback/:id` returns every column, so the row fields plus the diagnostics. */
-export interface FeedbackDetail extends FeedbackRow {
+export interface FeedbackDetail extends Omit<FeedbackRow, 'in_app' | 'unread_count'> {
+  /** Whether the user can see in-app messages; without it the only way to answer is email. */
+  in_app: boolean;
   build: string | null;
   bundle_id: string | null;
   locale: string | null;
@@ -47,13 +55,17 @@ export interface FeedbackDetail extends FeedbackRow {
   metadata: Record<string, unknown> | null;
 }
 
-/** One email already sent to the user from the console. */
-export interface FeedbackReply {
+/** One message after the feedback itself, from either side. */
+export interface FeedbackMessage {
+  /** Ordering and read-marker cursor. */
+  seq: number;
   id: string;
-  to_email: string;
-  subject: string;
+  author: 'user' | 'admin';
   body: string;
-  sent_at: number;
+  created_at: number;
+  /** Set on an admin message that was also emailed. */
+  email_to: string | null;
+  email_subject: string | null;
 }
 
 export interface Attachment {

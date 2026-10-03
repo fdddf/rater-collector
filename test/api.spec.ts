@@ -60,11 +60,24 @@ const validBody = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-/** Runs the full three-step submission and returns the feedback id. */
-async function submitFeedback(overrides: Record<string, unknown> = {}): Promise<string> {
+/** A fresh SDK reporter token — the shape the client generates: 32 random bytes, base64url. */
+function newReporter(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Runs the full three-step submission and returns the feedback id. With a reporter token,
+ * it's sent the way the SDK sends it, so the feedback becomes one of that reporter's threads.
+ */
+async function submitFeedback(
+  overrides: Record<string, unknown> = {},
+  reporter?: string,
+): Promise<string> {
+  const headers = reporter ? { ...clientHeaders, 'X-Rater-Reporter': reporter } : clientHeaders;
   const created = await request('/v1/feedback', {
     method: 'POST',
-    headers: clientHeaders,
+    headers,
     body: JSON.stringify(validBody(overrides)),
   });
   const { id } = await created.json<{ id: string }>();
@@ -916,13 +929,13 @@ describe('translating copy', () => {
   });
 });
 
-describe('replying by email', () => {
+describe('console messages', () => {
   const RESEND_ENV = {
     RESEND_API_KEY: 're_test_key',
     RESEND_FROM: 'Support <support@mail.example.com>',
     RESEND_REPLY_TO: 'support@support.example.com',
   };
-  const reply = { subject: 'Re: your feedback', body: 'Thanks — fixed in 1.0.1.' };
+  const emailed = { body: 'Thanks — fixed in 1.0.1.', email: { subject: 'Re: your feedback' } };
 
   /** Replaces global fetch so nothing leaves the test, and records what Resend was sent. */
   function stubResend(response: Response) {
@@ -934,13 +947,40 @@ describe('replying by email', () => {
     return calls;
   }
 
+  const post = (id: string, body: unknown, envOverride?: Record<string, string>) =>
+    request(
+      `/admin/api/feedback/${id}/messages`,
+      { method: 'POST', headers: adminHeaders, body: JSON.stringify(body) },
+      envOverride,
+    );
+
   afterEach(() => vi.unstubAllGlobals());
+
+  it('posts into the in-app conversation without touching email', async () => {
+    const id = await submitFeedback({}, newReporter());
+    const calls = stubResend(Response.json({ id: 'never' }));
+
+    const res = await post(id, { body: 'Could you send a screen recording?' });
+    expect(res.status).toBe(201);
+    expect((await res.json<any>()).message).toMatchObject({ author: 'admin', email_to: null });
+    expect(calls).toHaveLength(0);
+
+    const detail = await (await request(`/admin/api/feedback/${id}`, { headers: adminHeaders })).json<any>();
+    expect(detail.feedback.in_app).toBe(true);
+    expect(detail.feedback.reporter_hash).toBeUndefined();
+    expect(detail.messages.map((m: any) => m.body)).toEqual(['Could you send a screen recording?']);
+  });
+
+  it('refuses an in-app-only message to feedback from a client without conversations', async () => {
+    const id = await submitFeedback();
+    const res = await post(id, { body: 'Hello?' });
+    expect(res.status).toBe(400);
+    expect((await res.json<any>()).error.message).toContain('reply by email');
+  });
 
   it('names the missing secret instead of failing at the provider', async () => {
     const id = await submitFeedback();
-    const res = await request(`/admin/api/feedback/${id}/reply`, {
-      method: 'POST', headers: adminHeaders, body: JSON.stringify(reply),
-    });
+    const res = await post(id, emailed);
     expect(res.status).toBe(400);
     expect((await res.json<any>()).error.message).toContain('RESEND_API_KEY');
   });
@@ -949,11 +989,7 @@ describe('replying by email', () => {
     const id = await submitFeedback();
     const calls = stubResend(Response.json({ id: 'resend-msg-1' }));
 
-    const res = await request(
-      `/admin/api/feedback/${id}/reply`,
-      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
-      RESEND_ENV,
-    );
+    const res = await post(id, emailed, RESEND_ENV);
     expect(res.status).toBe(201);
 
     expect(calls).toHaveLength(1);
@@ -963,77 +999,351 @@ describe('replying by email', () => {
     expect(sent).toMatchObject({
       from: RESEND_ENV.RESEND_FROM,
       to: ['tester@example.com'],
-      subject: reply.subject,
-      text: reply.body,
+      subject: emailed.email.subject,
+      text: emailed.body,
       reply_to: RESEND_ENV.RESEND_REPLY_TO,
     });
 
     const detail = await (await request(`/admin/api/feedback/${id}`, { headers: adminHeaders })).json<any>();
-    expect(detail.replies).toHaveLength(1);
-    expect(detail.replies[0]).toMatchObject({ to_email: 'tester@example.com', subject: reply.subject });
+    expect(detail.feedback.in_app).toBe(false);
+    expect(detail.messages).toHaveLength(1);
+    expect(detail.messages[0]).toMatchObject({
+      author: 'admin',
+      email_to: 'tester@example.com',
+      email_subject: emailed.email.subject,
+    });
     expect(
-      await env.DB.prepare('SELECT provider_id FROM feedback_replies WHERE feedback_id = ?')
+      await env.DB.prepare('SELECT email_provider_id FROM feedback_messages WHERE feedback_id = ?')
         .bind(id)
-        .first<{ provider_id: string }>(),
-    ).toMatchObject({ provider_id: 'resend-msg-1' });
+        .first<{ email_provider_id: string }>(),
+    ).toMatchObject({ email_provider_id: 'resend-msg-1' });
   });
 
   it('records nothing when Resend rejects the message', async () => {
-    const id = await submitFeedback();
+    const id = await submitFeedback({}, newReporter());
     stubResend(Response.json({ message: 'The domain is not verified.' }, { status: 403 }));
 
-    const res = await request(
-      `/admin/api/feedback/${id}/reply`,
-      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
-      RESEND_ENV,
-    );
+    const res = await post(id, emailed, RESEND_ENV);
     expect(res.status).toBe(502);
     expect((await res.json<any>()).error.message).toContain('not verified');
     expect(
-      await env.DB.prepare('SELECT id FROM feedback_replies WHERE feedback_id = ?').bind(id).first(),
+      await env.DB.prepare('SELECT seq FROM feedback_messages WHERE feedback_id = ?').bind(id).first(),
     ).toBeNull();
   });
 
-  it('refuses a feedback that left no email address', async () => {
+  it('refuses to email a feedback that left no email address', async () => {
     const id = await submitFeedback({ email: '' });
     const calls = stubResend(Response.json({ id: 'never' }));
 
-    const res = await request(
-      `/admin/api/feedback/${id}/reply`,
-      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
-      RESEND_ENV,
-    );
+    const res = await post(id, emailed, RESEND_ENV);
     expect(res.status).toBe(400);
     expect(calls).toHaveLength(0);
   });
 
   it('returns 404 for an unknown feedback', async () => {
-    const res = await request(
-      '/admin/api/feedback/fb_nope/reply',
-      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
-      RESEND_ENV,
-    );
+    const res = await post('fb_nope', emailed, RESEND_ENV);
     expect(res.status).toBe(404);
   });
 
-  it('takes the replies with the feedback when it is deleted', async () => {
-    const id = await submitFeedback();
-    stubResend(Response.json({ id: 'resend-msg-2' }));
-    await request(
-      `/admin/api/feedback/${id}/reply`,
-      { method: 'POST', headers: adminHeaders, body: JSON.stringify(reply) },
-      RESEND_ENV,
-    );
+  it('takes the conversation with the feedback when it is deleted', async () => {
+    const id = await submitFeedback({}, newReporter());
+    await post(id, { body: 'On it.' });
 
     await request(`/admin/api/feedback/${id}`, { method: 'DELETE', headers: adminHeaders });
     expect(
-      await env.DB.prepare('SELECT id FROM feedback_replies WHERE feedback_id = ?').bind(id).first(),
+      await env.DB.prepare('SELECT seq FROM feedback_messages WHERE feedback_id = ?').bind(id).first(),
     ).toBeNull();
   });
 
-  it('reports whether replying is configured', async () => {
+  it('reports whether emailing is configured', async () => {
     const res = await request('/admin/api/settings', { headers: adminHeaders });
     expect((await res.json<any>()).reply_enabled).toBe(false);
+  });
+});
+
+describe('in-app conversations', () => {
+  const as = (reporter: string, extra: Record<string, string> = {}) => ({
+    ...clientHeaders,
+    'X-Rater-Reporter': reporter,
+    ...extra,
+  });
+
+  const say = (id: string, reporter: string, body: string, key = `msg-${crypto.randomUUID()}`) =>
+    request(`/v1/threads/${id}/messages`, {
+      method: 'POST',
+      headers: as(reporter),
+      body: JSON.stringify({ idempotency_key: key, body }),
+    });
+
+  const answer = (id: string, body: string) =>
+    request(`/admin/api/feedback/${id}/messages`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ body }),
+    });
+
+  const inbox = async (reporter: string) =>
+    (await request('/v1/inbox', { headers: as(reporter) })).json<any>();
+
+  it('requires a well-formed reporter token', async () => {
+    expect((await request('/v1/threads', { headers: clientHeaders })).status).toBe(401);
+    expect((await request('/v1/threads', { headers: as('short') })).status).toBe(401);
+    expect((await request('/v1/inbox', { headers: as('x'.repeat(200)) })).status).toBe(401);
+  });
+
+  it('still requires the app key', async () => {
+    const res = await request('/v1/threads', { headers: { 'X-Rater-Reporter': newReporter() } });
+    expect(res.status).toBe(401);
+  });
+
+  it('accepts a submission with a malformed token, just without a thread', async () => {
+    const id = await submitFeedback({}, 'not a token');
+    const row = await env.DB.prepare('SELECT reporter_hash FROM feedback WHERE id = ?')
+      .bind(id)
+      .first<{ reporter_hash: string | null }>();
+    expect(row?.reporter_hash).toBeNull();
+  });
+
+  it('stores only the hash of the token', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+    const row = await env.DB.prepare('SELECT reporter_hash FROM feedback WHERE id = ?')
+      .bind(id)
+      .first<{ reporter_hash: string }>();
+    expect(row?.reporter_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(row?.reporter_hash).not.toContain(reporter);
+  });
+
+  it('lists only the caller’s own completed feedback', async () => {
+    const mine = newReporter();
+    const theirs = newReporter();
+    const a = await submitFeedback({ message: 'First of mine' }, mine);
+    const b = await submitFeedback({ message: 'Second of mine' }, mine);
+    await submitFeedback({ message: 'Someone else' }, theirs);
+    // Created but never completed — the user saw an error, not a sent message.
+    await request('/v1/feedback', {
+      method: 'POST',
+      headers: as(mine),
+      body: JSON.stringify(validBody({ message: 'Abandoned midway' })),
+    });
+
+    const res = await request('/v1/threads', { headers: as(mine) });
+    expect(res.status).toBe(200);
+    const { items } = await res.json<any>();
+    expect(items.map((t: any) => t.id).sort()).toEqual([a, b].sort());
+    expect(items[0]).toMatchObject({ status: 'open', last_author: 'user', unread_count: 0 });
+  });
+
+  it('scopes threads per app as well as per reporter', async () => {
+    const reporter = newReporter();
+    await submitFeedback({}, reporter);
+    await seedApp('other-app', 'rtr_pub_otherkey000000000000000000000');
+
+    const res = await request('/v1/threads', {
+      headers: { ...as(reporter), 'X-Rater-Key': 'rtr_pub_otherkey000000000000000000000' },
+    });
+    expect((await res.json<any>()).items).toEqual([]);
+  });
+
+  it('hides another reporter’s thread behind a 404', async () => {
+    const id = await submitFeedback({}, newReporter());
+    const stranger = newReporter();
+
+    expect((await request(`/v1/threads/${id}`, { headers: as(stranger) })).status).toBe(404);
+    expect((await say(id, stranger, 'Let me in')).status).toBe(404);
+    const read = await request(`/v1/threads/${id}/read`, {
+      method: 'POST',
+      headers: as(stranger),
+      body: JSON.stringify({ seq: 1 }),
+    });
+    expect(read.status).toBe(404);
+  });
+
+  it('carries a conversation both ways, in order', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({ message: 'Export crashes' }, reporter);
+
+    await answer(id, 'Which iOS version?');
+    const sent = await say(id, reporter, 'iOS 18.2');
+    expect(sent.status).toBe(201);
+    expect((await sent.json<any>()).message).toMatchObject({ author: 'user', body: 'iOS 18.2' });
+
+    const res = await request(`/v1/threads/${id}`, { headers: as(reporter) });
+    const { thread, messages } = await res.json<any>();
+    expect(thread).toMatchObject({ id, message: 'Export crashes', last_author: 'user', preview: 'iOS 18.2' });
+    expect(messages.map((m: any) => [m.author, m.body])).toEqual([
+      ['admin', 'Which iOS version?'],
+      ['user', 'iOS 18.2'],
+    ]);
+    expect(messages[0].seq).toBeLessThan(messages[1].seq);
+    // The console's email bookkeeping is not the user's business.
+    expect(messages[0].email_to).toBeUndefined();
+  });
+
+  it('returns only what came after the cursor', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+    await answer(id, 'One');
+    const first = await (await request(`/v1/threads/${id}`, { headers: as(reporter) })).json<any>();
+    const cursor = first.messages.at(-1).seq;
+
+    await answer(id, 'Two');
+    const next = await (await request(`/v1/threads/${id}?after=${cursor}`, { headers: as(reporter) })).json<any>();
+    expect(next.messages.map((m: any) => m.body)).toEqual(['Two']);
+  });
+
+  it('posts a resent message once', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+
+    const first = await say(id, reporter, 'Hello', 'same-key-123');
+    const again = await say(id, reporter, 'Hello', 'same-key-123');
+    expect(first.status).toBe(201);
+    expect(again.status).toBe(200);
+    const [a, b] = [await first.json<any>(), await again.json<any>()];
+    expect(b.duplicate).toBe(true);
+    expect(b.message.id).toBe(a.message.id);
+
+    const { messages } = await (await request(`/v1/threads/${id}`, { headers: as(reporter) })).json<any>();
+    expect(messages).toHaveLength(1);
+  });
+
+  it('rejects an empty message', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+    expect((await say(id, reporter, '   ')).status).toBe(400);
+  });
+
+  it('counts unread admin messages until the user reads them', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+    const other = await submitFeedback({}, reporter);
+    expect(await inbox(reporter)).toEqual({ unread_count: 0, unread_threads: 0 });
+
+    await answer(id, 'One');
+    await answer(id, 'Two');
+    await answer(other, 'Three');
+    expect(await inbox(reporter)).toEqual({ unread_count: 3, unread_threads: 2 });
+
+    const { messages } = await (await request(`/v1/threads/${id}`, { headers: as(reporter) })).json<any>();
+    const read = await request(`/v1/threads/${id}/read`, {
+      method: 'POST',
+      headers: as(reporter),
+      body: JSON.stringify({ seq: messages.at(-1).seq }),
+    });
+    expect(read.status).toBe(200);
+    expect(await inbox(reporter)).toEqual({ unread_count: 1, unread_threads: 1 });
+
+    const { items } = await (await request('/v1/threads', { headers: as(reporter) })).json<any>();
+    expect(items.find((t: any) => t.id === id).unread_count).toBe(0);
+    expect(items.find((t: any) => t.id === other).unread_count).toBe(1);
+  });
+
+  it('never moves the read marker past the newest message', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+    await request(`/v1/threads/${id}/read`, {
+      method: 'POST',
+      headers: as(reporter),
+      body: JSON.stringify({ seq: 1_000_000 }),
+    });
+
+    await answer(id, 'Written after the bogus read');
+    expect((await inbox(reporter)).unread_count).toBe(1);
+  });
+
+  it('reopens a resolved thread when the user writes back', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+    await request(`/admin/api/feedback/${id}`, {
+      method: 'PATCH',
+      headers: adminHeaders,
+      body: JSON.stringify({ status: 'resolved' }),
+    });
+
+    const before = await (await request(`/v1/threads/${id}`, { headers: as(reporter) })).json<any>();
+    expect(before.thread.status).toBe('resolved');
+
+    await say(id, reporter, 'Still broken in 1.0.1');
+    const after = await (await request(`/admin/api/feedback/${id}`, { headers: adminHeaders })).json<any>();
+    expect(after.feedback.status).toBe('open');
+  });
+
+  it('hides spam from the user and refuses replies to it', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+    await request(`/admin/api/feedback/${id}`, {
+      method: 'PATCH',
+      headers: adminHeaders,
+      body: JSON.stringify({ status: 'spam' }),
+    });
+
+    expect((await (await request('/v1/threads', { headers: as(reporter) })).json<any>()).items).toEqual([]);
+    expect((await say(id, reporter, 'Hello?')).status).toBe(404);
+  });
+
+  it('shows the console which threads are waiting on it', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+    const quiet = await submitFeedback({}, reporter);
+    await say(id, reporter, 'Any news?');
+
+    const list = await (await request('/admin/api/feedback', { headers: adminHeaders })).json<any>();
+    expect(list.items.find((f: any) => f.id === id)).toMatchObject({ unread_count: 1, in_app: 1 });
+    expect(list.items.find((f: any) => f.id === quiet).unread_count).toBe(0);
+
+    const unread = await (await request('/admin/api/feedback?unread=1', { headers: adminHeaders })).json<any>();
+    expect(unread.items.map((f: any) => f.id)).toEqual([id]);
+
+    // Opening the thread in the console reads it.
+    await request(`/admin/api/feedback/${id}`, { headers: adminHeaders });
+    const after = await (await request('/admin/api/feedback?unread=1', { headers: adminHeaders })).json<any>();
+    expect(after.items).toEqual([]);
+  });
+
+  it('notifies the console’s push targets when the user writes back', async () => {
+    const reporter = newReporter();
+    const id = await submitFeedback({}, reporter);
+
+    const calls: { url: string; body: any }[] = [];
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init.body ?? '{}')) });
+      return Response.json({ code: 200 });
+    });
+    try {
+      await request(
+        `/v1/threads/${id}/messages`,
+        {
+          method: 'POST',
+          headers: as(reporter),
+          body: JSON.stringify({ idempotency_key: 'notify-key-1', body: 'Any news?' }),
+        },
+        { BARK_SERVER_URL: 'https://bark.example.com', BARK_DEVICE_KEY: 'devicekey123' },
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body.title).toBe(`New reply — Test ${TEST_APP_ID}`);
+    expect(calls[0]!.body.body).toContain('Any news?');
+  });
+
+  it('erases everything the reporter sent, and nothing else', async () => {
+    const reporter = newReporter();
+    const mine = await submitFeedback({ attachment_count: 1 }, reporter);
+    await answer(mine, 'Thanks!');
+    const theirs = await submitFeedback({}, newReporter());
+
+    const res = await request('/v1/threads', { method: 'DELETE', headers: as(reporter) });
+    expect(res.status).toBe(200);
+    expect((await res.json<any>()).deleted).toBe(1);
+
+    expect(await env.DB.prepare('SELECT id FROM feedback WHERE id = ?').bind(mine).first()).toBeNull();
+    expect(
+      await env.DB.prepare('SELECT seq FROM feedback_messages WHERE feedback_id = ?').bind(mine).first(),
+    ).toBeNull();
+    expect(await env.DB.prepare('SELECT id FROM feedback WHERE id = ?').bind(theirs).first()).not.toBeNull();
   });
 });
 
