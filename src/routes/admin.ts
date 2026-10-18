@@ -451,7 +451,7 @@ api.patch('/feedback/:id', async (c) => {
  * The console writes to the user.
  *
  * The message lands in the in-app conversation, and with `email` also goes out through
- * Resend. Feedback from a client without conversations (no reporter token) can only be
+ * Cloudflare Email Sending. Feedback from a client without conversations (no reporter token) can only be
  * answered by email, so there `email` is required. The recipient comes from the stored
  * `feedback.email`, never from the request body: the console is a reply box, not a mailer
  * someone can point anywhere.

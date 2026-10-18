@@ -24,8 +24,8 @@ const BASE = 'http://localhost';
 async function request(
   path: string,
   init?: RequestInit,
-  /** Extra bindings for this call only — how the optional secrets get exercised. */
-  envOverride?: Record<string, string>,
+  /** Extra bindings for this call only — how the optional secrets and the email binding get exercised. */
+  envOverride?: Record<string, unknown>,
 ): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (!headers.has('CF-Connecting-IP')) {
@@ -930,40 +930,46 @@ describe('translating copy', () => {
 });
 
 describe('console messages', () => {
-  const RESEND_ENV = {
-    RESEND_API_KEY: 're_test_key',
-    RESEND_FROM: 'Support <support@mail.example.com>',
-    RESEND_REPLY_TO: 'support@support.example.com',
-  };
+  const EMAIL_FROM = 'Support <support@mail.example.com>';
+  const EMAIL_REPLY_TO = 'support@support.example.com';
   const emailed = { body: 'Thanks — fixed in 1.0.1.', email: { subject: 'Re: your feedback' } };
 
-  /** Replaces global fetch so nothing leaves the test, and records what Resend was sent. */
-  function stubResend(response: Response) {
-    const calls: { url: string; init: RequestInit }[] = [];
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      calls.push({ url: String(input), init });
-      return response.clone();
-    });
-    return calls;
+  /**
+   * Stands in for the `send_email` binding: records what the Worker handed it and either
+   * returns a message id or throws the way Email Sending does, with a `code` on the Error.
+   * Nothing is stubbed globally — the binding is injected per request, so a test that
+   * forgets it would fail rather than quietly reach the real simulator.
+   */
+  function stubEmail(outcome: EmailSendResult | Error) {
+    const sent: EmailMessageBuilder[] = [];
+    const EMAIL = {
+      async send(message: EmailMessage | EmailMessageBuilder) {
+        sent.push(message as EmailMessageBuilder);
+        if (outcome instanceof Error) throw outcome;
+        return outcome;
+      },
+    };
+    return { sent, env: { EMAIL, EMAIL_FROM, EMAIL_REPLY_TO } };
   }
 
-  const post = (id: string, body: unknown, envOverride?: Record<string, string>) =>
+  /** The error shape the binding throws: an Error carrying the Email Sending code. */
+  const sendError = (code: string, message: string) => Object.assign(new Error(message), { code });
+
+  const post = (id: string, body: unknown, envOverride?: Record<string, unknown>) =>
     request(
       `/admin/api/feedback/${id}/messages`,
       { method: 'POST', headers: adminHeaders, body: JSON.stringify(body) },
       envOverride,
     );
 
-  afterEach(() => vi.unstubAllGlobals());
-
   it('posts into the in-app conversation without touching email', async () => {
     const id = await submitFeedback({}, newReporter());
-    const calls = stubResend(Response.json({ id: 'never' }));
+    const email = stubEmail({ messageId: 'never' });
 
-    const res = await post(id, { body: 'Could you send a screen recording?' });
+    const res = await post(id, { body: 'Could you send a screen recording?' }, email.env);
     expect(res.status).toBe(201);
     expect((await res.json<any>()).message).toMatchObject({ author: 'admin', email_to: null });
-    expect(calls).toHaveLength(0);
+    expect(email.sent).toHaveLength(0);
 
     const detail = await (await request(`/admin/api/feedback/${id}`, { headers: adminHeaders })).json<any>();
     expect(detail.feedback.in_app).toBe(true);
@@ -978,30 +984,29 @@ describe('console messages', () => {
     expect((await res.json<any>()).error.message).toContain('reply by email');
   });
 
-  it('names the missing secret instead of failing at the provider', async () => {
+  it('names the missing secret instead of failing at the send', async () => {
     const id = await submitFeedback();
     const res = await post(id, emailed);
     expect(res.status).toBe(400);
-    expect((await res.json<any>()).error.message).toContain('RESEND_API_KEY');
+    expect((await res.json<any>()).error.message).toContain('EMAIL_FROM');
   });
 
-  it('sends through Resend and records what went out', async () => {
+  it('sends through the Email Sending binding and records what went out', async () => {
     const id = await submitFeedback();
-    const calls = stubResend(Response.json({ id: 'resend-msg-1' }));
+    const email = stubEmail({ messageId: 'cf-msg-1' });
 
-    const res = await post(id, emailed, RESEND_ENV);
+    const res = await post(id, emailed, email.env);
     expect(res.status).toBe(201);
 
-    expect(calls).toHaveLength(1);
-    const call = calls[0]!;
-    expect(call.url).toBe('https://api.resend.com/emails');
-    const sent = JSON.parse(call.init.body as string);
-    expect(sent).toMatchObject({
-      from: RESEND_ENV.RESEND_FROM,
-      to: ['tester@example.com'],
+    expect(email.sent).toHaveLength(1);
+    // The display name travels beside the address: the binding validates `from` as an
+    // address, so "Support <support@…>" would not pass as one string.
+    expect(email.sent[0]).toMatchObject({
+      from: { name: 'Support', email: 'support@mail.example.com' },
+      to: 'tester@example.com',
       subject: emailed.email.subject,
       text: emailed.body,
-      reply_to: RESEND_ENV.RESEND_REPLY_TO,
+      replyTo: EMAIL_REPLY_TO,
     });
 
     const detail = await (await request(`/admin/api/feedback/${id}`, { headers: adminHeaders })).json<any>();
@@ -1016,16 +1021,20 @@ describe('console messages', () => {
       await env.DB.prepare('SELECT email_provider_id FROM feedback_messages WHERE feedback_id = ?')
         .bind(id)
         .first<{ email_provider_id: string }>(),
-    ).toMatchObject({ email_provider_id: 'resend-msg-1' });
+    ).toMatchObject({ email_provider_id: 'cf-msg-1' });
   });
 
-  it('records nothing when Resend rejects the message', async () => {
+  it('records nothing when Email Sending rejects the message', async () => {
     const id = await submitFeedback({}, newReporter());
-    stubResend(Response.json({ message: 'The domain is not verified.' }, { status: 403 }));
+    const email = stubEmail(
+      sendError('E_SENDER_DOMAIN_NOT_AVAILABLE', 'The domain is not onboarded for sending.'),
+    );
 
-    const res = await post(id, emailed, RESEND_ENV);
+    const res = await post(id, emailed, email.env);
     expect(res.status).toBe(502);
-    expect((await res.json<any>()).error.message).toContain('not verified');
+    const { error } = await res.json<any>();
+    expect(error.message).toContain('E_SENDER_DOMAIN_NOT_AVAILABLE');
+    expect(error.message).toContain('not onboarded');
     expect(
       await env.DB.prepare('SELECT seq FROM feedback_messages WHERE feedback_id = ?').bind(id).first(),
     ).toBeNull();
@@ -1033,15 +1042,15 @@ describe('console messages', () => {
 
   it('refuses to email a feedback that left no email address', async () => {
     const id = await submitFeedback({ email: '' });
-    const calls = stubResend(Response.json({ id: 'never' }));
+    const email = stubEmail({ messageId: 'never' });
 
-    const res = await post(id, emailed, RESEND_ENV);
+    const res = await post(id, emailed, email.env);
     expect(res.status).toBe(400);
-    expect(calls).toHaveLength(0);
+    expect(email.sent).toHaveLength(0);
   });
 
   it('returns 404 for an unknown feedback', async () => {
-    const res = await post('fb_nope', emailed, RESEND_ENV);
+    const res = await post('fb_nope', emailed, stubEmail({ messageId: 'never' }).env);
     expect(res.status).toBe(404);
   });
 

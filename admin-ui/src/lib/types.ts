@@ -107,7 +107,7 @@ export type PromptDraft = Omit<PromptConfig, 'id' | 'app_id' | 'updated_at'> &
 /** Server capabilities, so the console can hide what isn't wired up. */
 export interface Settings {
   translate_enabled: boolean;
-  /** Whether Resend is configured; without it the detail view falls back to a mailto: link. */
+  /** Whether email sending is configured; without it the detail view falls back to a mailto: link. */
   reply_enabled: boolean;
 }
 

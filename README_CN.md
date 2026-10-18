@@ -205,17 +205,17 @@ npx wrangler secret put TRANSLATE_BASE_URL    # 例如 https://api.deepseek.com/
 
 反馈详情里有会话记录和撰写框。消息默认发到 app 内 —— 用户下次打开会话就能看到。弹窗打开期间每 5 秒刷新一次，并把用户新写的内容标为已读；用户打开过你的消息后会显示 "Seen"。
 
-来自不支持会话的旧版本 app 的反馈（没有 reporter token）只能用邮件回复。配好 [Resend](https://resend.com) 之后，任何消息都可以勾选 **Also email it** 同时发邮件。收件地址取自这条反馈本身，不接受请求里传入；发信失败什么都不存，所以标着已发邮件的消息一定被服务商接收了。
+来自不支持会话的旧版本 app 的反馈（没有 reporter token）只能用邮件回复。发信走 [Cloudflare Email Sending](https://developers.cloudflare.com/email-service/)，用的是 Worker 自己的 `send_email` 绑定（`wrangler.jsonc` 里的 `EMAIL`），所以不需要第三方 API key。配好发信域名之后，任何消息都可以勾选 **Also email it** 同时发邮件。收件地址取自这条反馈本身，不接受请求里传入；发信失败什么都不存，所以标着已发邮件的消息一定被 Cloudflare 接收了。
 
 ```bash
-npx wrangler secret put RESEND_API_KEY        # re_...
-npx wrangler secret put RESEND_FROM           # "Support <support@your-domain.com>" —— 域名需在 Resend 验证过
-npx wrangler secret put RESEND_REPLY_TO       # 可选；用户回信落到哪个邮箱
+npx wrangler email sending enable your-domain.com   # 一次性，照提示配 DNS
+npx wrangler secret put EMAIL_FROM            # "Support <support@your-domain.com>" —— 属于该域名
+npx wrangler secret put EMAIL_REPLY_TO        # 可选；用户回信落到哪个邮箱
 ```
 
-有两点要注意。`RESEND_FROM` 的域名必须在 Resend 里验证过（SPF/DKIM），否则发信会返回 502 并带上服务商的原话。另外 Resend 只负责发信：用户点回复是寄到 `RESEND_REPLY_TO`，不会回到后台里 —— 所以填一个你真的会看的邮箱，比如用 [Email Routing](https://developers.cloudflare.com/email-routing/) 转发到自己私人邮箱的地址。
+有两点要注意。`EMAIL_FROM` 的域名必须已经接入 Email Sending，否则发信会返回 502 并带上 Cloudflare 的错误码（比如 `E_SENDER_DOMAIN_NOT_AVAILABLE`）。另外 Email Sending 只负责发信：用户点回复是寄到 `EMAIL_REPLY_TO`，不会回到后台里 —— 所以填一个你真的会看的邮箱，比如用 [Email Routing](https://developers.cloudflare.com/email-routing/) 转发到自己私人邮箱的地址。
 
-不设 `RESEND_API_KEY` 的话，app 内消息照常可用；只能走邮件的反馈仍是原来那个 `mailto:` 按钮。
+不设 `EMAIL_FROM` 的话，app 内消息照常可用；只能走邮件的反馈仍是原来那个 `mailto:` 按钮。
 
 ### 改后台界面
 

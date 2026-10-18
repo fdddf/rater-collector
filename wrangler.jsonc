@@ -38,6 +38,12 @@
     { "name": "MESSAGE_LIMIT", "namespace_id": "1003", "simple": { "limit": 20, "period": 60 } }
   ],
 
+  // Cloudflare Email Sending, behind the console's reply-by-email composer. Enable the
+  // sender domain once with `npx wrangler email sending enable <your-domain>` — the
+  // binding is unrestricted on purpose, because replies go to whichever address the user
+  // left on their feedback.
+  "send_email": [{ "name": "EMAIL" }],
+
   // There is no `vars` block on purpose. PUBLIC_BASE_URL is the one value that would
   // belong in it, but `vars` is committed and this repo is public — see below.
 
@@ -59,7 +65,9 @@
   //   TRANSLATE_PROVIDER  — optional; "anthropic" (default) or "openai"
   //   TRANSLATE_MODEL     — optional for anthropic, required for openai
   //   TRANSLATE_BASE_URL  — optional; base URL of an OpenAI-compatible endpoint
-  //   RESEND_API_KEY      — optional; enables replying to feedback by email
-  //   RESEND_FROM         — required with RESEND_API_KEY; sender on a Resend-verified domain
-  //   RESEND_REPLY_TO     — optional; inbox the user's reply goes to
+  //   EMAIL_FROM          — optional; enables replying to feedback by email. Sender on a
+  //                         domain onboarded to Cloudflare Email Sending, either
+  //                         "user@domain" or "Name <user@domain>". The send itself needs
+  //                         no credential — it goes through the EMAIL binding above.
+  //   EMAIL_REPLY_TO      — optional; inbox the user's reply goes to
 }

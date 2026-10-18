@@ -212,6 +212,10 @@ export function EmptyState({
 /**
  * Built on <dialog> so focus trapping, Esc and inertness come from the platform —
  * `showModal()` has to be called imperatively, hence the effect.
+ *
+ * A click on the backdrop deliberately does nothing. These dialogs hold half-written
+ * replies and prompt edits, and <dialog> gives no confirmation step, so a stray click
+ * beside the box used to throw the text away. Esc and the close button stay.
  */
 export function Modal({
   open,
@@ -242,17 +246,6 @@ export function Modal({
       ref={ref}
       onClose={onClose}
       onCancel={onClose}
-      // A <dialog> fills its own box, so a backdrop click has to be detected by hit-testing
-      // against the dialog's rectangle. Requiring the target to *be* the dialog matters too:
-      // a native <select> popup paints outside that rect, so choosing an option would
-      // otherwise register as a backdrop click and close the whole modal.
-      onClick={(e) => {
-        if (e.target !== e.currentTarget) return;
-        const r = e.currentTarget.getBoundingClientRect();
-        const outside =
-          e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-        if (outside) onClose();
-      }}
       className={cx(
         'm-auto w-[calc(100vw-2rem)] rounded-2xl bg-surface p-0 text-ink shadow-2xl',
         'ring-1 ring-border backdrop:bg-black/50 backdrop:backdrop-blur-[2px]',

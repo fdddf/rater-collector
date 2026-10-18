@@ -77,7 +77,7 @@ export default function FeedbackDetail({
   const [replyBody, setReplyBody] = useState('');
   const [alsoEmail, setAlsoEmail] = useState(false);
   const [sending, setSending] = useState(false);
-  // Whether the server has Resend credentials. Failing quietly leaves the mailto: fallback.
+  // Whether the Worker can send mail itself. Failing quietly leaves the mailto: fallback.
   const [canReply, setCanReply] = useState(false);
 
   useEffect(() => {
@@ -463,8 +463,9 @@ function Conversation({
         </>
       ) : detail.email ? (
         <p className="text-xs text-ink-3">
-          Sending from the console needs the RESEND_API_KEY and RESEND_FROM secrets. Until
-          they're set, use the “Reply by email” button below to open your mail client.
+          Sending from the console needs the EMAIL_FROM secret and a sender domain onboarded
+          to Cloudflare Email Sending. Until then, use the “Reply by email” button below to
+          open your mail client.
         </p>
       ) : (
         <p className="text-xs text-ink-3">

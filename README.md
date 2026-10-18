@@ -209,17 +209,17 @@ Leave `TRANSLATE_API_KEY` unset and the Translate button simply doesn't appear; 
 
 The feedback detail view shows the conversation and a composer. A message goes into the app by default — the user sees it the next time they open the conversation — and the dialog refreshes every 5 seconds while it's open, marking whatever the user wrote as read. A "Seen" mark appears once the user has opened your message.
 
-Feedback from an app version without conversations (no reporter token) can only be answered by email. With [Resend](https://resend.com) configured, any message can also be emailed, via an **Also email it** checkbox. The address comes from the feedback itself — never from the request — and a failed send stores nothing, so a message marked as emailed was accepted by the provider.
+Feedback from an app version without conversations (no reporter token) can only be answered by email. The mail goes out through [Cloudflare Email Sending](https://developers.cloudflare.com/email-service/) over the Worker's own `send_email` binding (`EMAIL` in `wrangler.jsonc`), so there is no third-party API key to hold. Once a sender domain is set up, any message can also be emailed, via an **Also email it** checkbox. The address comes from the feedback itself — never from the request — and a failed send stores nothing, so a message marked as emailed was accepted by Cloudflare.
 
 ```bash
-npx wrangler secret put RESEND_API_KEY        # re_...
-npx wrangler secret put RESEND_FROM           # "Support <support@your-domain.com>" — domain verified in Resend
-npx wrangler secret put RESEND_REPLY_TO       # optional; where the user's reply lands
+npx wrangler email sending enable your-domain.com   # once, then follow the DNS steps
+npx wrangler secret put EMAIL_FROM            # "Support <support@your-domain.com>" — on that domain
+npx wrangler secret put EMAIL_REPLY_TO        # optional; where the user's reply lands
 ```
 
-Two things worth knowing. The `RESEND_FROM` domain has to be verified in Resend (SPF/DKIM), or the send comes back as a 502 quoting the provider's complaint. And Resend only sends: the user's reply goes to `RESEND_REPLY_TO`, not back into the console — point it at a mailbox you actually read, e.g. an address that [Email Routing](https://developers.cloudflare.com/email-routing/) forwards to you.
+Two things worth knowing. The `EMAIL_FROM` domain has to be onboarded to Email Sending, or the send comes back as a 502 quoting Cloudflare's error code (`E_SENDER_DOMAIN_NOT_AVAILABLE` and friends). And Email Sending only sends: the user's reply goes to `EMAIL_REPLY_TO`, not back into the console — point it at a mailbox you actually read, e.g. an address that [Email Routing](https://developers.cloudflare.com/email-routing/) forwards to you.
 
-Leave `RESEND_API_KEY` unset and in-app messages work as before; email-only feedback gets the old `mailto:` button.
+Leave `EMAIL_FROM` unset and in-app messages work as before; email-only feedback gets the old `mailto:` button.
 
 ### Working on the console
 
